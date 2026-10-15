@@ -70,17 +70,18 @@ export async function POST(req: Request) {
     // native search tools (Google Search, Groq browser search) can't be combined with a response schema.
     const research = await generateText({
       model,
-      tools: searchTools(8),
+      tools: searchTools(5),
       toolChoice: searchToolChoice,
-      stopWhen: isStepCount(6),
+      stopWhen: isStepCount(3),
+      abortSignal: AbortSignal.timeout(40_000),
       system:
         "Sei un redattore esperto di gite ed eventi per famiglie con bambini in Italia. Cerca SEMPRE sul web prima di rispondere. Riporta solo informazioni verificate, indicando per ogni voce l'URL reale della fonte, del profilo Instagram e della pagina Facebook ufficiali quando li trovi. Non inventare mai link. Scrivi in italiano.",
       prompt: `Oggi è il ${today}. Zona: ${zone}.
-Fai più ricerche web e trova:
+Fai al massimo 2 ricerche web mirate e trova:
 1. Eventi, sagre e feste per famiglie dei prossimi 30 giorni nella zona (con date).
 2. Parchi, attività natura, trenini o tour adatti ai bambini aperti in questo periodo.
 3. Luoghi per famiglie virali sui Reel di Instagram / video Facebook / TikTok nella zona, con il profilo ufficiale o il creator più attivo che ne parla.
-4. Da 3 a 5 creator o pagine social attivi che pubblicano Reel su gite per famiglie in ${zone}, con URL del profilo.
+4. Da 2 a 4 creator o pagine social attivi che pubblicano Reel su gite per famiglie in ${zone}, con URL del profilo.
 Per ogni meta indica: nome, città, indirizzo, date, età consigliata, se adatta a passeggino, picnic e cani, descrizione e un consiglio per i genitori.`,
     })
 
@@ -92,6 +93,7 @@ Per ogni meta indica: nome, città, indirizzo, date, età consigliata, se adatta
     const { output } = await generateText({
       model,
       output: Output.object({ schema: scanSchema }),
+      abortSignal: AbortSignal.timeout(30_000),
       system:
         "Trasforma la ricerca in dati strutturati. Usa solo URL presenti nel testo o nell'elenco fonti; se manca un URL verificato lascia la stringa vuota. Scrivi in italiano.",
       prompt: `Ricerca su ${zone}:
@@ -100,7 +102,7 @@ ${research.text}
 Fonti trovate:
 ${sourceList || "(nessuna)"}
 
-Restituisci da 6 a 10 mete in "places" (almeno 2 nella categoria "Social Trends (Reel Virali)") e i creator trovati in "creators".`,
+Restituisci da 5 a 8 mete in "places" (almeno 2 nella categoria "Social Trends (Reel Virali)") e i creator trovati in "creators".`,
     })
 
     const [places, creators] = await Promise.all([

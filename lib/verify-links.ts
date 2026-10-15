@@ -12,7 +12,7 @@ async function isAlive(url: string): Promise<boolean> {
     const res = await fetch(url, {
       method: "GET",
       redirect: "follow",
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(2500),
       headers: { "user-agent": "Mozilla/5.0 (compatible; FamilyTripFinder/1.0)" },
     })
     res.body?.cancel()

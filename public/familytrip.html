@@ -802,8 +802,13 @@
             });
             
             // Search & Filters State
-            const [selectedRegion, setSelectedRegion] = useState("Tutte");
-            const [selectedCity, setSelectedCity] = useState("Tutte");
+            const LOCATION_STORAGE = 'familytrip_last_location';
+            const savedLocation = (() => {
+                try { return JSON.parse(localStorage.getItem(LOCATION_STORAGE)) || {}; } catch { return {}; }
+            })();
+            const [selectedRegion, setSelectedRegion] = useState(() => REGIONS_DATA[savedLocation.region] ? savedLocation.region : "Tutte");
+            const [selectedCity, setSelectedCity] = useState(() => REGIONS_DATA[savedLocation.region]?.includes(savedLocation.city) ? savedLocation.city : "Tutte");
+            const [locationReady, setLocationReady] = useState(false);
             const [searchTerm, setSearchTerm] = useState("");
             const [activeTab, setActiveTab] = useState("Tutti");
             const [seasonFilter, setSeasonFilter] = useState("Tutte");
@@ -820,8 +825,28 @@
 
             const [isAiSearching, setIsAiSearching] = useState(false);
             const [scanError, setScanError] = useState("");
-            const scanCacheRef = useRef(new Map());
+            const SCAN_CACHE_STORAGE = 'familytrip_scan_cache';
+            const QUOTA_STORAGE = 'familytrip_quota_until';
+            const readJSON = (k) => { try { return JSON.parse(localStorage.getItem(k)) || {}; } catch { return {}; } };
+            const scanCacheRef = useRef(null);
+            if (!scanCacheRef.current) scanCacheRef.current = new Map(Object.entries(readJSON(SCAN_CACHE_STORAGE)));
+            const saveScan = (key, data) => {
+                const cache = scanCacheRef.current;
+                cache.set(key, data);
+                const newest = [...cache.entries()]
+                    .sort((a, b) => new Date(b[1].scannedAt) - new Date(a[1].scannedAt))
+                    .slice(0, 12);
+                scanCacheRef.current = new Map(newest);
+                try { localStorage.setItem(SCAN_CACHE_STORAGE, JSON.stringify(Object.fromEntries(newest))); } catch {}
+            };
+            const isQuotaPaused = (provider) => (readJSON(QUOTA_STORAGE)[provider] || 0) > Date.now();
+            const pauseQuota = (provider) => {
+                const all = readJSON(QUOTA_STORAGE);
+                all[provider] = Date.now() + 60 * 60 * 1000;
+                localStorage.setItem(QUOTA_STORAGE, JSON.stringify(all));
+            };
             const scanAbortRef = useRef(null);
+            const scanInFlightKeyRef = useRef("");
             const [aiItinerary, setAiItinerary] = useState(null);
             const [isGeneratingItinerary, setIsGeneratingItinerary] = useState(false);
             const [gpsLoading, setGpsLoading] = useState(false);
@@ -855,7 +880,6 @@
                 setGeminiKey(storedKey);
                 setKeyDraft("");
                 setIsEditingKey(!storedKey);
-                scanCacheRef.current.clear();
             };
 
             const askForKey = (msg) => {
@@ -900,9 +924,11 @@
             };
 
             // GPS Geolocation Handler
-            const handleGPSLocation = () => {
+            const handleGPSLocation = ({ silent = false } = {}) => {
+                const finish = () => { setGpsLoading(false); setLocationReady(true); };
                 if (!navigator.geolocation) {
-                    showToast("Geolocalizzazione non supportata dal tuo browser.");
+                    if (!silent) showToast("Geolocalizzazione non supportata dal tuo browser.");
+                    finish();
                     return;
                 }
                 setGpsLoading(true);
@@ -910,42 +936,45 @@
                     async (position) => {
                         try {
                             const { latitude, longitude } = position.coords;
-                            const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}`);
+                            const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&accept-language=it&lat=${latitude}&lon=${longitude}`, { signal: AbortSignal.timeout(6000) });
                             const data = await res.json();
                             const address = data.address || {};
-                            const detectedState = address.state || address.region || "";
+                            const detectedState = (address.state || address.region || "").toLowerCase();
                             const detectedCity = address.city || address.town || address.village || address.municipality || "";
 
-                            // Match region
-                            let matchedRegion = "Tutte";
-                            Object.keys(REGIONS_DATA).forEach(reg => {
-                                if (reg !== "Tutte" && detectedState.toLowerCase().includes(reg.toLowerCase())) {
-                                    matchedRegion = reg;
-                                }
-                            });
+                            const matchedRegion = Object.keys(REGIONS_DATA).find(reg => reg !== "Tutte" && detectedState.includes(reg.toLowerCase())) || "Tutte";
+                            const matchedCity = (REGIONS_DATA[matchedRegion] || []).find(c => c !== "Tutte" && c.toLowerCase() === detectedCity.toLowerCase()) || "Tutte";
 
                             setSelectedRegion(matchedRegion);
-                            showToast(`Posizione rilevata: ${detectedCity || detectedState || 'Italia'}`);
+                            setSelectedCity(matchedCity);
+                            localStorage.setItem(LOCATION_STORAGE, JSON.stringify({ region: matchedRegion, city: matchedCity }));
+                            showToast(`Posizione rilevata: ${detectedCity || matchedRegion || 'Italia'}`);
                         } catch (err) {
-                            showToast("Errore nel rilevare la posizione.");
+                            if (!silent) showToast("Errore nel rilevare la posizione.");
                         } finally {
-                            setGpsLoading(false);
+                            finish();
                         }
                     },
-                    (error) => {
-                        setGpsLoading(false);
-                        showToast("Impossibile accedere alla posizione GPS.");
-                    }
+                    () => {
+                        finish();
+                        if (!silent) showToast("Attiva la posizione nelle impostazioni del browser.");
+                    },
+                    { enableHighAccuracy: false, timeout: 8000, maximumAge: 30 * 60 * 1000 }
                 );
             };
 
-            const SCAN_TTL_MS = 15 * 60 * 1000;
+            useEffect(() => {
+                handleGPSLocation({ silent: true });
+            }, []);
 
-            const runLiveScan = async ({ force = false } = {}) => {
-                if (!geminiKeyRef.current) {
-                    if (force) askForKey();
-                    return;
-                }
+            const SCAN_TTL_MS = 12 * 60 * 60 * 1000;
+
+            const otherProviderWithKey = () => {
+                const other = providerRef.current === 'gemini' ? 'groq' : 'gemini';
+                return localStorage.getItem(KEY_STORAGE[other]) && !isQuotaPaused(other) ? other : null;
+            };
+
+            const runLiveScan = async ({ force = false, retried = false } = {}) => {
                 const key = `${selectedRegion}|${selectedCity}`;
                 const cached = scanCacheRef.current.get(key);
                 if (!force && cached && Date.now() - new Date(cached.scannedAt).getTime() < SCAN_TTL_MS) {
@@ -954,9 +983,33 @@
                     return;
                 }
 
+                if (!retried && isQuotaPaused(providerRef.current)) {
+                    const fallback = otherProviderWithKey();
+                    if (fallback) {
+                        switchProvider(fallback);
+                    } else {
+                        if (cached) setLiveData(cached);
+                        const msg = `Quota gratuita esaurita: ${cached ? 'mostro le mete salvate' : 'mostro il catalogo'}. Riprova tra un'ora o aggiungi un'altra chiave.`;
+                        setScanError(msg);
+                        if (force) showToast(msg);
+                        return;
+                    }
+                }
+
+                if (!geminiKeyRef.current) {
+                    if (cached) setLiveData(cached);
+                    if (force) askForKey();
+                    return;
+                }
+
+                if (!force && !retried && scanInFlightKeyRef.current === key) return;
+
                 scanAbortRef.current?.abort();
                 const controller = new AbortController();
                 scanAbortRef.current = controller;
+                scanInFlightKeyRef.current = key;
+                let timedOut = false;
+                const timeoutId = setTimeout(() => { timedOut = true; controller.abort(); }, 90000);
                 setIsAiSearching(true);
                 setScanError("");
                 if (force) showToast("Scansione web in corso...");
@@ -970,18 +1023,37 @@
                     });
                     const data = await res.json();
                     if (!res.ok) {
+                        if (data.code === 'ai_quota') {
+                            pauseQuota(providerRef.current);
+                            const fallback = !retried && otherProviderWithKey();
+                            if (fallback) {
+                                const fromLabel = PROVIDERS[providerRef.current].label;
+                                switchProvider(fallback);
+                                showToast(`Quota ${fromLabel} esaurita: passo a ${PROVIDERS[fallback].label}`);
+                                clearTimeout(timeoutId);
+                                return runLiveScan({ force, retried: true });
+                            }
+                            if (cached) setLiveData(cached);
+                        }
                         forgetKeyIfRejected(res, data);
-                        throw new Error(data.error || 'Scansione non riuscita');
+                        throw new Error(data.code === 'ai_quota'
+                            ? `Quota gratuita esaurita: ${cached ? 'mostro le mete salvate' : 'mostro il catalogo'}. Riprova tra un'ora o aggiungi un'altra chiave.`
+                            : (data.error || 'Scansione non riuscita'));
                     }
-                    scanCacheRef.current.set(key, data);
+                    saveScan(key, data);
                     setLiveData(data);
                     if (force) showToast(`${data.places.length} mete aggiornate dal web`);
                 } catch (err) {
-                    if (err.name === 'AbortError') return;
-                    setScanError(err.message);
-                    if (force) showToast(err.message);
+                    if (err.name === 'AbortError' && !timedOut) return;
+                    const message = timedOut ? "La scansione ci sta mettendo troppo. Riprova tra poco." : err.message;
+                    setScanError(message);
+                    if (force || timedOut) showToast(message);
                 } finally {
-                    if (scanAbortRef.current === controller) setIsAiSearching(false);
+                    clearTimeout(timeoutId);
+                    if (scanAbortRef.current === controller) {
+                        scanInFlightKeyRef.current = "";
+                        setIsAiSearching(false);
+                    }
                 }
             };
 
@@ -1001,7 +1073,9 @@
                 setKeyDraft("");
                 setIsEditingKey(false);
                 setShowSettingsModal(false);
-                scanCacheRef.current.clear();
+                const quota = readJSON(QUOTA_STORAGE);
+                delete quota[providerRef.current];
+                localStorage.setItem(QUOTA_STORAGE, JSON.stringify(quota));
                 runLiveScan({ force: true });
             };
 
@@ -1014,9 +1088,10 @@
             };
 
             useEffect(() => {
+                if (!locationReady) return;
                 const t = setTimeout(() => runLiveScan(), 600);
                 return () => clearTimeout(t);
-            }, [selectedRegion, selectedCity]);
+            }, [selectedRegion, selectedCity, locationReady]);
 
             const generateAIItinerary = async (place) => {
                 if (!geminiKeyRef.current) {
