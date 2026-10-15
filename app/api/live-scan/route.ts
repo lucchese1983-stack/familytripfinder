@@ -1,6 +1,6 @@
 import { generateText, isStepCount, Output } from "ai"
 import { z } from "zod"
-import { getAI } from "@/lib/ai"
+import { getAI, getProvider } from "@/lib/ai"
 import { aiErrorResponse } from "@/lib/ai-error"
 import { verifyLinks } from "@/lib/verify-links"
 
@@ -64,13 +64,14 @@ export async function POST(req: Request) {
   const today = new Date().toLocaleDateString("it-IT", { day: "numeric", month: "long", year: "numeric" })
 
   try {
-    const { model, searchTools } = getAI(req)
+    const { model, searchTools, searchToolChoice } = getAI(req)
 
     // Search grounding and structured output are split into two calls because
-    // Gemini's native Google Search tool can't be combined with a response schema on every model.
+    // native search tools (Google Search, Groq browser search) can't be combined with a response schema.
     const research = await generateText({
       model,
       tools: searchTools(8),
+      toolChoice: searchToolChoice,
       stopWhen: isStepCount(6),
       system:
         "Sei un redattore esperto di gite ed eventi per famiglie con bambini in Italia. Cerca SEMPRE sul web prima di rispondere. Riporta solo informazioni verificate, indicando per ogni voce l'URL reale della fonte, del profilo Instagram e della pagina Facebook ufficiali quando li trovi. Non inventare mai link. Scrivi in italiano.",
@@ -126,6 +127,6 @@ Restituisci da 6 a 10 mete in "places" (almeno 2 nella categoria "Social Trends 
     return Response.json({ places, creators, zone, scannedAt: new Date().toISOString() })
   } catch (error) {
     console.error("[live-scan]", error)
-    return aiErrorResponse(error, "Scansione web non riuscita. Riprova tra poco.")
+    return aiErrorResponse(error, "Scansione web non riuscita. Riprova tra poco.", getProvider(req))
   }
 }

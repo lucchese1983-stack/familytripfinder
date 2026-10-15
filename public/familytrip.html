@@ -827,14 +827,36 @@
             const [gpsLoading, setGpsLoading] = useState(false);
             const [toastMessage, setToastMessage] = useState("");
 
-            const GEMINI_KEY_STORAGE = 'familytrip_gemini_key';
-            const [geminiKey, setGeminiKey] = useState(() => localStorage.getItem(GEMINI_KEY_STORAGE) || "");
+            const PROVIDER_STORAGE = 'familytrip_ai_provider';
+            const KEY_STORAGE = { gemini: 'familytrip_gemini_key', groq: 'familytrip_groq_key' };
+            const PROVIDERS = {
+                gemini: { label: 'Gemini', placeholder: 'AIza...', site: 'aistudio.google.com', url: 'https://aistudio.google.com/app/apikey', note: 'Ricerca Google integrata' },
+                groq: { label: 'Groq', placeholder: 'gsk_...', site: 'console.groq.com', url: 'https://console.groq.com/keys', note: 'Molto veloce, ricerca web inclusa' },
+            };
+            const [aiProvider, setAiProvider] = useState(() => localStorage.getItem(PROVIDER_STORAGE) === 'groq' ? 'groq' : 'gemini');
+            const [geminiKey, setGeminiKey] = useState(() => localStorage.getItem(KEY_STORAGE[aiProvider]) || "");
             const [keyDraft, setKeyDraft] = useState("");
             const [isEditingKey, setIsEditingKey] = useState(false);
             const geminiKeyRef = useRef(geminiKey);
             geminiKeyRef.current = geminiKey;
+            const providerRef = useRef(aiProvider);
+            providerRef.current = aiProvider;
+            const providerInfo = PROVIDERS[aiProvider];
 
-            const aiHeaders = () => ({ 'Content-Type': 'application/json', 'x-gemini-key': geminiKeyRef.current });
+            const aiHeaders = () => ({ 'Content-Type': 'application/json', 'x-ai-provider': providerRef.current, 'x-ai-key': geminiKeyRef.current });
+
+            const switchProvider = (next) => {
+                if (next === providerRef.current) return;
+                const storedKey = localStorage.getItem(KEY_STORAGE[next]) || "";
+                localStorage.setItem(PROVIDER_STORAGE, next);
+                providerRef.current = next;
+                geminiKeyRef.current = storedKey;
+                setAiProvider(next);
+                setGeminiKey(storedKey);
+                setKeyDraft("");
+                setIsEditingKey(!storedKey);
+                scanCacheRef.current.clear();
+            };
 
             const askForKey = (msg) => {
                 setIsEditingKey(true);
@@ -843,8 +865,8 @@
             };
 
             const forgetKeyIfRejected = (res, data) => {
-                if (res.status === 401 || data.code === 'gemini_key_missing' || data.code === 'gemini_key_invalid') {
-                    localStorage.removeItem(GEMINI_KEY_STORAGE);
+                if (res.status === 401 || data.code === 'ai_key_missing' || data.code === 'ai_key_invalid') {
+                    localStorage.removeItem(KEY_STORAGE[providerRef.current]);
                     setGeminiKey("");
                     askForKey();
                 }
@@ -969,10 +991,11 @@
                 e.preventDefault();
                 const value = keyDraft.trim();
                 if (value.length < 20) {
-                    showToast("La chiave sembra incompleta: copiala di nuovo da AI Studio.");
+                    showToast(`La chiave sembra incompleta: copiala di nuovo da ${providerInfo.site}.`);
                     return;
                 }
-                localStorage.setItem(GEMINI_KEY_STORAGE, value);
+                localStorage.setItem(KEY_STORAGE[providerRef.current], value);
+                localStorage.setItem(PROVIDER_STORAGE, providerRef.current);
                 geminiKeyRef.current = value;
                 setGeminiKey(value);
                 setKeyDraft("");
@@ -983,7 +1006,7 @@
             };
 
             const removeGeminiKey = () => {
-                localStorage.removeItem(GEMINI_KEY_STORAGE);
+                localStorage.removeItem(KEY_STORAGE[providerRef.current]);
                 geminiKeyRef.current = "";
                 setGeminiKey("");
                 setIsEditingKey(true);
@@ -997,7 +1020,7 @@
 
             const generateAIItinerary = async (place) => {
                 if (!geminiKeyRef.current) {
-                    askForKey("Inserisci la tua chiave Gemini per creare il programma");
+                    askForKey(`Inserisci la tua chiave ${providerInfo.label} per creare il programma`);
                     return;
                 }
                 setIsGeneratingItinerary(true);
@@ -1413,7 +1436,7 @@
                                         <div className="rounded-2xl p-4 bg-coral-500/10 border border-coral-500/20">
                                             <h3 className="font-bold text-coral-300 mb-1.5 flex items-center gap-2">
                                                 <Icon name="sparkles" className="w-4 h-4" />
-                                                Gemini AI
+                                                Gemini o Groq AI
                                             </h3>
                                             <p className="text-xs text-slate-300">
                                                 Apri una meta e tocca &quot;Pianifica giornata&quot; per un programma completo dalla mattina alla sera.
@@ -1421,7 +1444,7 @@
                                         </div>
                                     </div>
                                     <p className="text-xs text-slate-400">
-                                        Inserisci la tua API Key Gemini (gratuita da Google AI Studio) nella sezione AI per abilitare itinerari e ricerca live sul web.
+                                        Tocca &quot;Live&quot; e inserisci una chiave gratuita Gemini o Groq per abilitare itinerari e ricerca live sul web. Se finisce la quota di una, passa all&apos;altra.
                                     </p>
                                     <button onClick={() => goTo("Tutti")} className="mt-2 h-11 px-5 rounded-2xl bg-white text-night-950 font-bold text-sm inline-flex items-center gap-2">
                                         <Icon name="compass" className="w-4 h-4 text-coral-500" />
@@ -1450,7 +1473,7 @@
                                                 <button onClick={resetFilters} className="h-11 px-5 rounded-2xl bg-white/10 text-white font-semibold text-sm">Azzera filtri</button>
                                             )}
                                             <button onClick={activeTab === "I Miei Preferiti" ? () => goTo("Tutti") : handleSearchWebWithGemini} className="h-11 px-5 rounded-2xl bg-coral-500 text-white font-bold text-sm hover:bg-coral-600">
-                                                {activeTab === "I Miei Preferiti" ? "Esplora le mete" : "Cerca con Gemini AI"}
+                                                {activeTab === "I Miei Preferiti" ? "Esplora le mete" : `Cerca con ${providerInfo.label} AI`}
                                             </button>
                                         </div>
                                     </div>
@@ -1708,14 +1731,30 @@
                                         <Icon name="radio" className="w-6 h-6" />
                                     </span>
                                     <div>
-                                        <h3 id="settings-title" className="font-display text-xl font-semibold text-white">Scansione Live con Gemini</h3>
-                                        <p className="text-xs text-slate-400">{geminiKey ? "Chiave salvata su questo dispositivo" : "Usa la tua chiave Gemini gratuita"}</p>
+                                        <h3 id="settings-title" className="font-display text-xl font-semibold text-white">Scansione Live con {providerInfo.label}</h3>
+                                        <p className="text-xs text-slate-400">{geminiKey ? "Chiave salvata su questo dispositivo" : `Usa la tua chiave ${providerInfo.label} gratuita`}</p>
                                     </div>
+                                </div>
+
+                                <div role="radiogroup" aria-label="Scegli l'AI" className="grid grid-cols-2 gap-2 mb-5">
+                                    {Object.entries(PROVIDERS).map(([id, p]) => (
+                                        <button
+                                            key={id}
+                                            type="button"
+                                            role="radio"
+                                            aria-checked={aiProvider === id}
+                                            onClick={() => switchProvider(id)}
+                                            className={`flex flex-col items-start gap-0.5 rounded-2xl px-4 py-3 text-left border transition-colors ${aiProvider === id ? 'bg-mint-500/15 border-mint-400 text-white' : 'bg-white/5 border-white/10 text-slate-300 hover:border-white/25'}`}
+                                        >
+                                            <span className="font-bold text-sm">{p.label}</span>
+                                            <span className="text-[11px] leading-snug text-slate-400">{p.note}</span>
+                                        </button>
+                                    ))}
                                 </div>
 
                                 {(!geminiKey || isEditingKey) ? (
                                     <form onSubmit={saveGeminiKey} className="flex flex-col gap-3 text-sm">
-                                        <label htmlFor="gemini-key" className="text-xs font-semibold text-slate-200">Chiave API Gemini</label>
+                                        <label htmlFor="gemini-key" className="text-xs font-semibold text-slate-200">Chiave API {providerInfo.label}</label>
                                         <input
                                             id="gemini-key"
                                             type="password"
@@ -1724,12 +1763,12 @@
                                             autoFocus
                                             value={keyDraft}
                                             onChange={(e) => setKeyDraft(e.target.value)}
-                                            placeholder="AIza..."
+                                            placeholder={providerInfo.placeholder}
                                             className="h-12 w-full rounded-2xl bg-white/5 border border-white/15 px-4 text-base text-white placeholder:text-slate-500 focus:outline-none focus:border-mint-400"
                                         />
                                         <p className="text-xs text-slate-400 leading-relaxed">
                                             Creala gratis su{" "}
-                                            <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-mint-400 underline">aistudio.google.com</a>.
+                                            <a href={providerInfo.url} target="_blank" rel="noopener noreferrer" className="text-mint-400 underline">{providerInfo.site}</a>.
                                             {" "}Resta salvata solo su questo telefono e viene usata solo per le tue scansioni.
                                         </p>
                                         <div className="flex gap-2">
