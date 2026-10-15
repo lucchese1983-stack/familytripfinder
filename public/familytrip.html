@@ -723,10 +723,8 @@
         // Main App Component
         function App() {
             // State
-            const [places, setPlaces] = useState(() => {
-                const saved = localStorage.getItem('familytrip_places');
-                return saved ? JSON.parse(saved) : INITIAL_PLACES;
-            });
+            const [liveData, setLiveData] = useState({ places: [], creators: [], zone: "", scannedAt: null });
+            const places = useMemo(() => [...liveData.places, ...INITIAL_PLACES], [liveData.places]);
             const [favorites, setFavorites] = useState(() => {
                 const saved = localStorage.getItem('familytrip_favs');
                 return saved ? JSON.parse(saved) : [];
@@ -749,31 +747,24 @@
             const [activeDetailModal, setActiveDetailModal] = useState(null);
             const [showSettingsModal, setShowSettingsModal] = useState(false);
 
-            // Gemini API Key & AI State
-            const [apiKey, setApiKey] = useState(() => localStorage.getItem('gemini_api_key') || '');
-            const [aiModel, setAiModel] = useState(() => localStorage.getItem('gemini_model') || 'gemini-2.5-flash');
             const [isAiSearching, setIsAiSearching] = useState(false);
+            const [scanError, setScanError] = useState("");
+            const scanCacheRef = useRef(new Map());
+            const scanAbortRef = useRef(null);
             const [aiItinerary, setAiItinerary] = useState(null);
             const [isGeneratingItinerary, setIsGeneratingItinerary] = useState(false);
             const [gpsLoading, setGpsLoading] = useState(false);
             const [toastMessage, setToastMessage] = useState("");
 
-            // Save state to local storage
             useEffect(() => {
-                localStorage.setItem('familytrip_places', JSON.stringify(places));
-            }, [places]);
+                localStorage.removeItem('familytrip_places');
+                localStorage.removeItem('gemini_api_key');
+                localStorage.removeItem('gemini_model');
+            }, []);
 
             useEffect(() => {
                 localStorage.setItem('familytrip_favs', JSON.stringify(favorites));
             }, [favorites]);
-
-            useEffect(() => {
-                localStorage.setItem('gemini_api_key', apiKey);
-            }, [apiKey]);
-
-            useEffect(() => {
-                localStorage.setItem('gemini_model', aiModel);
-            }, [aiModel]);
 
             // Auto Toast alert helper
             const showToast = (msg) => {
@@ -832,120 +823,76 @@
                 );
             };
 
-            // Live Web Search Engine using Gemini AI API with Web Search Prompting
-            const handleSearchWebWithGemini = async () => {
-                if (!apiKey) {
-                    setShowSettingsModal(true);
-                    showToast("Inserisci la tua API Key Gemini per cercare sul Web!");
+            const SCAN_TTL_MS = 15 * 60 * 1000;
+
+            const runLiveScan = async ({ force = false } = {}) => {
+                const key = `${selectedRegion}|${selectedCity}`;
+                const cached = scanCacheRef.current.get(key);
+                if (!force && cached && Date.now() - new Date(cached.scannedAt).getTime() < SCAN_TTL_MS) {
+                    setLiveData(cached);
+                    setScanError("");
                     return;
                 }
 
+                scanAbortRef.current?.abort();
+                const controller = new AbortController();
+                scanAbortRef.current = controller;
                 setIsAiSearching(true);
-                showToast("Cerco eventi e gite reali sul web...");
+                setScanError("");
+                if (force) showToast("Scansione web in corso...");
 
                 try {
-                    const regionText = selectedRegion !== "Tutte" ? selectedRegion : "Italia";
-                    const cityText = selectedCity !== "Tutte" ? selectedCity : "";
-                    const queryPrompt = `Sei un cercatore esperto di eventi e gite per famiglie in Italia.
-Cerca sul web per la regione "${regionText}" e la località "${cityText}" le novità aggiornate per famiglie: sagre imminenti, parchi per bambini, eventi nei weekend, sentieri o trend Instagram/TikTok per famiglie.
-Ritorna tassativamente SOLO un array JSON valido di oggetti con questa struttura esatta, senza markdown o testo prima/dopo:
-[
-  {
-    "title": "Nome evento o luogo",
-    "category": "Sagre & Feste" | "Parchi & Natura" | "Treni & Tour" | "Family Hotel" | "Social Trends (Reel Virali)",
-    "region": "${regionText}",
-    "city": "Nome Città",
-    "season": "Primavera" | "Estate" | "Autunno" | "Inverno" | "Tutte",
-    "minAge": "0-3 Baby" | "4-8 Kids" | "9+ Teens" | "Tutte le età",
-    "stroller": true|false,
-    "picnic": true|false,
-    "dogs": true|false,
-    "rating": 4.8,
-    "image": "https://images.unsplash.com/photo-1500595046743-cd271d694d30?auto=format&fit=crop&w=800&q=80",
-    "description": "Descrizione accurata dell'evento o luogo con date e dettagli",
-    "parentTip": "Consiglio utile pratico per mamma e papà",
-    "address": "Indirizzo completo con via e comune",
-    "socialInsta": "https://www.instagram.com/explore/",
-    "socialFb": "https://www.facebook.com/"
-  }
-]`;
-
-                    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${aiModel}:generateContent?key=${apiKey}`, {
+                    const res = await fetch('/api/live-scan', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            contents: [{ parts: [{ text: queryPrompt }] }]
-                        })
+                        body: JSON.stringify({ region: selectedRegion, city: selectedCity }),
+                        signal: controller.signal,
                     });
-
-                    const data = await response.json();
-                    if (data.error) throw new Error(data.error.message);
-
-                    const textResponse = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-                    // Clean code blocks if present
-                    const cleanJson = textResponse.replace(/```json/g, '').replace(/```/g, '').trim();
-                    const newEvents = JSON.parse(cleanJson);
-
-                    if (Array.isArray(newEvents) && newEvents.length > 0) {
-                        const formattedWithIds = newEvents.map((item, idx) => ({
-                            ...item,
-                            id: 'web_' + Date.now() + '_' + idx
-                        }));
-                        setPlaces(prev => [...formattedWithIds, ...prev]);
-                        showToast(`Trovati ${newEvents.length} nuovi eventi dal web!`);
-                    } else {
-                        showToast("Nessun nuovo evento trovato per i filtri correnti.");
-                    }
-
+                    const data = await res.json();
+                    if (!res.ok) throw new Error(data.error || 'Scansione non riuscita');
+                    scanCacheRef.current.set(key, data);
+                    setLiveData(data);
+                    if (force) showToast(`${data.places.length} mete aggiornate dal web`);
                 } catch (err) {
-                    console.error(err);
-                    showToast("Errore durante la ricerca web AI: " + err.message);
+                    if (err.name === 'AbortError') return;
+                    setScanError(err.message);
+                    if (force) showToast(err.message);
                 } finally {
-                    setIsAiSearching(false);
+                    if (scanAbortRef.current === controller) setIsAiSearching(false);
                 }
             };
 
-            // Gemini AI Itinerary Generator
-            const generateAIItinerary = async (place) => {
-                if (!apiKey) {
-                    setShowSettingsModal(true);
-                    showToast("Inserisci la tua Gemini API Key nelle impostazioni!");
-                    return;
-                }
+            const handleSearchWebWithGemini = () => runLiveScan({ force: true });
 
+            useEffect(() => {
+                const t = setTimeout(() => runLiveScan(), 600);
+                return () => clearTimeout(t);
+            }, [selectedRegion, selectedCity]);
+
+            const generateAIItinerary = async (place) => {
                 setIsGeneratingItinerary(true);
                 setAiItinerary(null);
-
                 try {
-                    const prompt = `Crea un itinerario dettagliato da mattina a sera per una famiglia con bambini in visita a: "${place.title}" a ${place.city} (${place.region}).
-Dettaglia:
-1. Mattina (Orari consigliati, attività principali, pausa merenda)
-2. Pranzo (Consiglio dove mangiare o area picnic)
-3. Pomeriggio (Attività secondarie nei dintorni, passeggiata o relax)
-4. Sera & Consigli per i genitori (Cosa portare nello zaino, parcheggi vicini, pass passeggino).
-
-Scrivi in formato chiaro con elenchi puntati ed emoji in lingua Italiana.`;
-
-                    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${aiModel}:generateContent?key=${apiKey}`, {
+                    const res = await fetch('/api/itinerary', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            contents: [{ parts: [{ text: prompt }] }]
-                        })
+                        body: JSON.stringify({ title: place.title, city: place.city, region: place.region, address: place.address, minAge: place.minAge }),
                     });
-
-                    const data = await response.json();
-                    if (data.error) throw new Error(data.error.message);
-
-                    const itineraryText = data.candidates?.[0]?.content?.parts?.[0]?.text || "Nessun itinerario generato.";
-                    setAiItinerary(itineraryText);
-
+                    const data = await res.json();
+                    if (!res.ok) throw new Error(data.error || 'Errore');
+                    setAiItinerary(data.itinerary);
                 } catch (err) {
-                    console.error(err);
-                    showToast("Errore Gemini AI: " + err.message);
+                    showToast(err.message);
                 } finally {
                     setIsGeneratingItinerary(false);
                 }
+            };
+
+            const exportItineraryPDF = (place) => {
+                const prev = document.title;
+                document.title = `Programma - ${place.title}`;
+                window.print();
+                document.title = prev;
             };
 
             // Filtered Places Computation
