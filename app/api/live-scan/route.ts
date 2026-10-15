@@ -1,10 +1,10 @@
-import { generateText, isStepCount, Output } from "ai"
+import { generateText } from "ai"
 import { z } from "zod"
-import { getAI, getProvider } from "@/lib/ai"
+import { getAI, getProvider, withModelFallback } from "@/lib/ai"
 import { aiErrorResponse } from "@/lib/ai-error"
 import { verifyLinks } from "@/lib/verify-links"
 
-export const maxDuration = 120
+export const maxDuration = 60
 
 const CATEGORIES = [
   "Sagre & Feste",
@@ -14,43 +14,57 @@ const CATEGORIES = [
   "Social Trends (Reel Virali)",
 ] as const
 
+const text = (fallback = "") => z.coerce.string().catch(fallback)
+const bool = z.coerce.boolean().catch(false)
+
 const placeSchema = z.object({
-  title: z.string(),
-  category: z.enum(CATEGORIES),
-  city: z.string(),
-  season: z.enum(["Primavera", "Estate", "Autunno", "Inverno", "Tutte"]),
-  minAge: z.enum(["0-3 Baby", "4-8 Kids", "9+ Teens", "Tutte le età"]),
-  stroller: z.boolean(),
-  picnic: z.boolean(),
-  dogs: z.boolean(),
-  rating: z.number(),
-  dateInfo: z.string().describe("Date o periodo dell'evento, oppure 'Sempre aperto'"),
-  description: z.string(),
-  parentTip: z.string(),
-  address: z.string(),
-  sourceUrl: z.string().describe("URL della pagina web trovata nella ricerca che conferma l'informazione"),
-  socialInsta: z.string().describe("URL del profilo Instagram ufficiale (o del creator più attivo) trovato nella ricerca, altrimenti stringa vuota"),
-  socialFb: z.string().describe("URL della pagina Facebook ufficiale trovata nella ricerca, altrimenti stringa vuota"),
+  title: z.coerce.string().min(2),
+  category: z.enum(CATEGORIES).catch("Parchi & Natura"),
+  city: text(),
+  season: z.enum(["Primavera", "Estate", "Autunno", "Inverno", "Tutte"]).catch("Tutte"),
+  minAge: z.enum(["0-3 Baby", "4-8 Kids", "9+ Teens", "Tutte le età"]).catch("Tutte le età"),
+  stroller: bool,
+  picnic: bool,
+  dogs: bool,
+  rating: z.coerce.number().catch(4.5),
+  dateInfo: text("Sempre aperto"),
+  description: text(),
+  parentTip: text(),
+  address: text(),
+  sourceUrl: text(),
+  socialInsta: text(),
+  socialFb: text(),
 })
 
-const scanSchema = z.object({
-  places: z.array(placeSchema),
-  creators: z
-    .array(
-      z.object({
-        name: z.string(),
-        platform: z.enum(["Instagram", "Facebook", "TikTok"]),
-        url: z.string(),
-        focus: z.string().describe("Di cosa parlano i suoi Reel, in breve"),
-      }),
-    )
-    .describe("Creator e canali social attivi su gite per famiglie nella zona"),
+const creatorSchema = z.object({
+  name: z.coerce.string(),
+  platform: z.enum(["Instagram", "Facebook", "TikTok"]).catch("Instagram"),
+  url: z.coerce.string(),
+  focus: text(),
 })
 
 const bodySchema = z.object({
   region: z.string().max(60).default("Tutte"),
   city: z.string().max(80).default("Tutte"),
 })
+
+function parseScan(raw: string) {
+  const start = raw.indexOf("{")
+  const end = raw.lastIndexOf("}")
+  if (start === -1 || end <= start) return null
+  let json: { places?: unknown[]; creators?: unknown[] }
+  try {
+    json = JSON.parse(raw.slice(start, end + 1))
+  } catch {
+    return null
+  }
+  const pick = <T,>(items: unknown, schema: z.ZodType<T>) =>
+    (Array.isArray(items) ? items : []).flatMap((item) => {
+      const r = schema.safeParse(item)
+      return r.success ? [r.data] : []
+    })
+  return { places: pick(json.places, placeSchema).slice(0, 8), creators: pick(json.creators, creatorSchema).slice(0, 4) }
+}
 
 export async function POST(req: Request) {
   const parsed = bodySchema.safeParse(await req.json().catch(() => ({})))
@@ -64,50 +78,33 @@ export async function POST(req: Request) {
   const today = new Date().toLocaleDateString("it-IT", { day: "numeric", month: "long", year: "numeric" })
 
   try {
-    const { model, searchTools, searchToolChoice } = getAI(req)
+    // A single model call: the search tool runs inside it (provider-executed), so one scan = one API request.
+    const result = await withModelFallback(getAI(req), ({ model, searchTools, searchToolChoice }) =>
+      generateText({
+        model,
+        tools: searchTools(5),
+        toolChoice: searchToolChoice,
+        maxRetries: 0,
+        abortSignal: AbortSignal.timeout(45_000),
+        system:
+          "Sei un redattore di gite ed eventi per famiglie con bambini in Italia. Usa la ricerca web, riporta solo informazioni verificate e non inventare mai link. Rispondi SOLO con un oggetto JSON valido, senza testo prima o dopo e senza blocchi di codice.",
+        prompt: `Oggi è il ${today}. Zona: ${zone}.
+Con una sola ricerca web trova da 5 a 8 mete per famiglie: eventi e sagre dei prossimi 30 giorni, parchi e natura, trenini o tour, e almeno 2 luoghi virali sui Reel (categoria "Social Trends (Reel Virali)"). Trova anche 2-4 creator o pagine social che pubblicano gite per famiglie in ${zone}.
 
-    // Search grounding and structured output are split into two calls because
-    // native search tools (Google Search, Groq browser search) can't be combined with a response schema.
-    const research = await generateText({
-      model,
-      tools: searchTools(5),
-      toolChoice: searchToolChoice,
-      stopWhen: isStepCount(3),
-      abortSignal: AbortSignal.timeout(40_000),
-      system:
-        "Sei un redattore esperto di gite ed eventi per famiglie con bambini in Italia. Cerca SEMPRE sul web prima di rispondere. Riporta solo informazioni verificate, indicando per ogni voce l'URL reale della fonte, del profilo Instagram e della pagina Facebook ufficiali quando li trovi. Non inventare mai link. Scrivi in italiano.",
-      prompt: `Oggi è il ${today}. Zona: ${zone}.
-Fai al massimo 2 ricerche web mirate e trova:
-1. Eventi, sagre e feste per famiglie dei prossimi 30 giorni nella zona (con date).
-2. Parchi, attività natura, trenini o tour adatti ai bambini aperti in questo periodo.
-3. Luoghi per famiglie virali sui Reel di Instagram / video Facebook / TikTok nella zona, con il profilo ufficiale o il creator più attivo che ne parla.
-4. Da 2 a 4 creator o pagine social attivi che pubblicano Reel su gite per famiglie in ${zone}, con URL del profilo.
-Per ogni meta indica: nome, città, indirizzo, date, età consigliata, se adatta a passeggino, picnic e cani, descrizione e un consiglio per i genitori.`,
-    })
+Formato JSON:
+{"places":[{"title":"","category":"${CATEGORIES.join(" | ")}","city":"","season":"Primavera | Estate | Autunno | Inverno | Tutte","minAge":"0-3 Baby | 4-8 Kids | 9+ Teens | Tutte le età","stroller":true,"picnic":true,"dogs":false,"rating":4.6,"dateInfo":"date o 'Sempre aperto'","description":"","parentTip":"","address":"","sourceUrl":"URL reale della fonte","socialInsta":"URL Instagram ufficiale o vuoto","socialFb":"URL Facebook ufficiale o vuoto"}],
+"creators":[{"name":"","platform":"Instagram | Facebook | TikTok","url":"","focus":""}]}`,
+      }),
+    )
 
-    const sourceList = research.sources
-      .filter((s) => s.sourceType === "url")
-      .map((s) => `- ${s.title ?? ""} ${s.url}`)
-      .join("\n")
-
-    const { output } = await generateText({
-      model,
-      output: Output.object({ schema: scanSchema }),
-      abortSignal: AbortSignal.timeout(30_000),
-      system:
-        "Trasforma la ricerca in dati strutturati. Usa solo URL presenti nel testo o nell'elenco fonti; se manca un URL verificato lascia la stringa vuota. Scrivi in italiano.",
-      prompt: `Ricerca su ${zone}:
-${research.text}
-
-Fonti trovate:
-${sourceList || "(nessuna)"}
-
-Restituisci da 5 a 8 mete in "places" (almeno 2 nella categoria "Social Trends (Reel Virali)") e i creator trovati in "creators".`,
-    })
+    const scan = parseScan(result.text)
+    if (!scan || scan.places.length === 0) {
+      return Response.json({ error: "La ricerca non ha restituito mete leggibili. Riprova più tardi." }, { status: 502 })
+    }
 
     const [places, creators] = await Promise.all([
       Promise.all(
-        output.places.map(async (p, i) => {
+        scan.places.map(async (p, i) => {
           const [sourceUrl, socialInsta, socialFb] = await verifyLinks([p.sourceUrl, p.socialInsta, p.socialFb])
           return {
             ...p,
@@ -121,8 +118,8 @@ Restituisci da 5 a 8 mete in "places" (almeno 2 nella categoria "Social Trends (
           }
         }),
       ),
-      verifyLinks(output.creators.map((c) => c.url)).then((urls) =>
-        output.creators.map((c, i) => ({ ...c, url: urls[i] })).filter((c) => c.url),
+      verifyLinks(scan.creators.map((c) => c.url)).then((urls) =>
+        scan.creators.map((c, i) => ({ ...c, url: urls[i] })).filter((c) => c.url),
       ),
     ])
 

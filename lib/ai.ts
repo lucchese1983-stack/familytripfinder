@@ -2,7 +2,8 @@ import { createGoogleGenerativeAI } from "@ai-sdk/google"
 import { createGroq } from "@ai-sdk/groq"
 import { gateway, type LanguageModel, type ToolChoice, type ToolSet } from "ai"
 
-const GEMINI_MODEL = "gemini-3.5-flash"
+// Flash-Lite has the most generous free-tier daily limits; Flash is the fallback if Lite is unavailable.
+const GEMINI_MODELS = ["gemini-3.5-flash-lite", "gemini-3.5-flash"] as const
 const GROQ_MODEL = "openai/gpt-oss-120b"
 
 export type AIProvider = "gemini" | "groq"
@@ -10,6 +11,7 @@ export type AIProvider = "gemini" | "groq"
 export type AIConfig = {
   provider: AIProvider
   model: LanguageModel
+  fallbackModel?: LanguageModel
   searchTools: (maxResults: number) => ToolSet
   searchToolChoice?: ToolChoice<ToolSet>
 }
@@ -19,7 +21,7 @@ function readKey(req: Request, header: string) {
 }
 
 export function getAI(req: Request): AIConfig {
-  const requested = req.headers.get("x-ai-provider") === "groq" ? "groq" : "gemini"
+  const requested = getProvider(req)
   const userKey = readKey(req, "x-ai-key") ?? readKey(req, "x-gemini-key")
 
   if (requested === "groq") {
@@ -39,14 +41,15 @@ export function getAI(req: Request): AIConfig {
     const google = createGoogleGenerativeAI({ apiKey })
     return {
       provider: "gemini",
-      model: google(GEMINI_MODEL),
+      model: google(GEMINI_MODELS[0]),
+      fallbackModel: google(GEMINI_MODELS[1]),
       searchTools: () => ({ google_search: google.tools.googleSearch({}) }),
     }
   }
 
   return {
     provider: "gemini",
-    model: `google/${GEMINI_MODEL}`,
+    model: `google/${GEMINI_MODELS[0]}`,
     searchTools: (maxResults) => ({
       web_search: gateway.tools.perplexitySearch({
         maxResults,
@@ -55,6 +58,19 @@ export function getAI(req: Request): AIConfig {
         searchRecencyFilter: "month",
       }),
     }),
+  }
+}
+
+// Retries once on the fallback model only when the primary model doesn't exist (404), which costs no quota.
+export async function withModelFallback<T>(config: AIConfig, run: (c: AIConfig) => Promise<T>): Promise<T> {
+  try {
+    return await run(config)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (config.fallbackModel && /not found|404|not supported/i.test(message)) {
+      return run({ ...config, model: config.fallbackModel, fallbackModel: undefined })
+    }
+    throw error
   }
 }
 

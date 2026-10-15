@@ -857,9 +857,9 @@
                 try { localStorage.setItem(SCAN_CACHE_STORAGE, JSON.stringify(Object.fromEntries(newest))); } catch {}
             };
             const isQuotaPaused = (provider) => (readJSON(QUOTA_STORAGE)[provider] || 0) > Date.now();
-            const pauseQuota = (provider) => {
+            const pauseQuota = (provider, ms = 60 * 60 * 1000) => {
                 const all = readJSON(QUOTA_STORAGE);
-                all[provider] = Date.now() + 60 * 60 * 1000;
+                all[provider] = Date.now() + ms;
                 localStorage.setItem(QUOTA_STORAGE, JSON.stringify(all));
             };
             const scanAbortRef = useRef(null);
@@ -986,12 +986,17 @@
 
             const SCAN_TTL_MS = 12 * 60 * 60 * 1000;
 
-            const otherProviderWithKey = () => {
-                const other = providerRef.current === 'gemini' ? 'groq' : 'gemini';
-                return localStorage.getItem(KEY_STORAGE[other]) && !isQuotaPaused(other) ? other : null;
+            const keyFor = (provider) => localStorage.getItem(KEY_STORAGE[provider]) || "";
+            const hasUsableKey = (provider) => !!keyFor(provider) && !isQuotaPaused(provider);
+            const quotaMessage = (cached) => `Quota gratuita esaurita: ${cached ? 'mostro le mete salvate' : 'mostro il catalogo'}. Riprova più tardi.`;
+
+            const pickScanProvider = () => {
+                if (hasUsableKey('gemini')) return 'gemini';
+                if (hasUsableKey('groq')) return 'groq';
+                return null;
             };
 
-            const runLiveScan = async ({ force = false, retried = false } = {}) => {
+            const runLiveScan = async ({ force = false, provider = null, isGroqFallback = false } = {}) => {
                 const key = `${selectedRegion}|${selectedCity}`;
                 const cached = scanCacheRef.current.get(key);
                 if (!force && cached && Date.now() - new Date(cached.scannedAt).getTime() < SCAN_TTL_MS) {
@@ -1000,26 +1005,22 @@
                     return;
                 }
 
-                if (!retried && isQuotaPaused(providerRef.current)) {
-                    const fallback = otherProviderWithKey();
-                    if (fallback) {
-                        switchProvider(fallback);
-                    } else {
-                        if (cached) setLiveData(cached);
-                        const msg = `Quota gratuita esaurita: ${cached ? 'mostro le mete salvate' : 'mostro il catalogo'}. Riprova tra un'ora o aggiungi un'altra chiave.`;
-                        setScanError(msg);
-                        if (force) showToast(msg);
-                        return;
-                    }
-                }
-
-                if (!geminiKeyRef.current) {
+                if (!keyFor('gemini') && !keyFor('groq')) {
                     if (cached) setLiveData(cached);
                     if (force) askForKey();
                     return;
                 }
 
-                if (!force && !retried && scanInFlightKeyRef.current === key) return;
+                const scanProvider = provider || pickScanProvider();
+                if (!scanProvider) {
+                    if (cached) setLiveData(cached);
+                    const msg = quotaMessage(cached);
+                    setScanError(msg);
+                    if (force) showToast(msg);
+                    return;
+                }
+
+                if (!force && !isGroqFallback && scanInFlightKeyRef.current === key) return;
 
                 scanAbortRef.current?.abort();
                 const controller = new AbortController();
@@ -1034,28 +1035,27 @@
                 try {
                     const res = await fetch('/api/live-scan', {
                         method: 'POST',
-                        headers: aiHeaders(),
+                        headers: { 'Content-Type': 'application/json', 'x-ai-provider': scanProvider, 'x-ai-key': keyFor(scanProvider) },
                         body: JSON.stringify({ region: selectedRegion, city: selectedCity }),
                         signal: controller.signal,
                     });
                     const data = await res.json();
                     if (!res.ok) {
                         if (data.code === 'ai_quota') {
-                            pauseQuota(providerRef.current);
-                            const fallback = !retried && otherProviderWithKey();
-                            if (fallback) {
-                                const fromLabel = PROVIDERS[providerRef.current].label;
-                                switchProvider(fallback);
-                                showToast(`Quota ${fromLabel} esaurita: passo a ${PROVIDERS[fallback].label}`);
+                            pauseQuota(scanProvider, scanProvider === 'gemini' ? 10 * 60 * 1000 : 60 * 60 * 1000);
+                            if (scanProvider === 'gemini' && !isGroqFallback && hasUsableKey('groq')) {
+                                showToast("Quota Google esaurita: provo una volta con Groq");
                                 clearTimeout(timeoutId);
-                                return runLiveScan({ force, retried: true });
+                                return runLiveScan({ force, provider: 'groq', isGroqFallback: true });
                             }
                             if (cached) setLiveData(cached);
                         }
-                        forgetKeyIfRejected(res, data);
-                        throw new Error(data.code === 'ai_quota'
-                            ? `Quota gratuita esaurita: ${cached ? 'mostro le mete salvate' : 'mostro il catalogo'}. Riprova tra un'ora o aggiungi un'altra chiave.`
-                            : (data.error || 'Scansione non riuscita'));
+                        if (res.status === 401 || data.code === 'ai_key_missing' || data.code === 'ai_key_invalid') {
+                            localStorage.removeItem(KEY_STORAGE[scanProvider]);
+                            if (scanProvider === providerRef.current) setGeminiKey("");
+                            askForKey();
+                        }
+                        throw new Error(data.code === 'ai_quota' ? quotaMessage(cached) : (data.error || 'Scansione non riuscita'));
                     }
                     saveScan(key, data);
                     setLiveData(data);
