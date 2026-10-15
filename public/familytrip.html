@@ -717,9 +717,75 @@
                 el.innerHTML = '<i data-lucide="' + name + '" class="' + className + '"></i>';
                 window.lucide.createIcons({ root: el });
             }, [name, className]);
-            return <span ref={ref} aria-hidden="true" className="inline-flex shrink-0 items-center justify-center leading-none" />;
-        }
+  return <span ref={ref} aria-hidden="true" className="inline-flex shrink-0 items-center justify-center leading-none" />;
+  }
 
+  function formatScanAge(scannedAt) {
+  const minutes = Math.floor((Date.now() - new Date(scannedAt).getTime()) / 60000);
+  if (minutes < 2) return "Aggiornato Ora dal Web";
+  if (minutes < 60) return `Aggiornato dal Web ${minutes} min fa`;
+  return "Aggiornato dal Web oggi";
+  }
+
+  function LiveStatusBadge({ isScanning, scannedAt, error }) {
+  const [, tick] = useState(0);
+  useEffect(() => {
+  const id = setInterval(() => tick(n => n + 1), 30000);
+  return () => clearInterval(id);
+  }, []);
+
+  if (isScanning) {
+  return (
+  <span role="status" className="inline-flex w-fit items-center gap-2 h-7 px-3 rounded-full bg-sun-500/15 border border-sun-500/30 text-sun-400 text-[11px] font-bold">
+  <Icon name="loader-circle" className="w-3.5 h-3.5 animate-spin" />Scansione del web in corso...
+  </span>
+  );
+  }
+  if (scannedAt) {
+  return (
+  <span role="status" className="inline-flex w-fit items-center gap-2 h-7 px-3 rounded-full bg-coral-500/15 border border-coral-500/40 text-coral-300 text-[11px] font-bold">
+  <span className="relative flex w-2 h-2">
+  <span className="absolute inset-0 rounded-full bg-coral-500 animate-ping opacity-75"></span>
+  <span className="relative w-2 h-2 rounded-full bg-coral-500"></span>
+  </span>
+  {formatScanAge(scannedAt)}
+  </span>
+  );
+  }
+  if (error) {
+  return <span role="status" className="text-[11px] font-semibold text-coral-300">{error}</span>;
+  }
+  return null;
+  }
+
+  function CreatorStrip({ creators, zone }) {
+  const iconFor = { Instagram: "camera", Facebook: "users", TikTok: "music" };
+  return (
+  <div className="flex flex-col gap-2">
+  <p className="text-[11px] font-bold uppercase tracking-wide text-slate-400">Reel di tendenza &middot; {zone}</p>
+  <div className="flex gap-2 overflow-x-auto no-scrollbar -mx-1 px-1">
+  {creators.map(c => (
+  <a
+  key={c.url}
+  href={c.url}
+  target="_blank"
+  rel="noopener noreferrer"
+  className="shrink-0 flex items-center gap-2.5 max-w-[16rem] p-2.5 pr-4 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 transition"
+  >
+  <span className="grid place-items-center w-9 h-9 rounded-xl bg-coral-500/15 text-coral-300">
+  <Icon name={iconFor[c.platform] || "play"} className="w-4 h-4" />
+  </span>
+  <span className="min-w-0 flex flex-col">
+  <span className="text-xs font-bold text-white truncate">{c.name}</span>
+  <span className="text-[11px] text-slate-400 truncate">{c.platform} &middot; {c.focus}</span>
+  </span>
+  </a>
+  ))}
+  </div>
+  </div>
+  );
+  }
+  
         // Main App Component
         function App() {
             // State
@@ -1023,9 +1089,9 @@
                                     onClick={() => setShowSettingsModal(true)}
                                     className="inline-flex items-center gap-2 h-10 px-4 rounded-full text-xs font-semibold bg-white/5 border border-white/10 text-slate-100 hover:bg-white/10 transition"
                                 >
-                                    <Icon name="bot" className="w-4 h-4 text-mint-400" />
-                                    <span>Gemini AI</span>
-                                    {apiKey && <span className="w-2 h-2 rounded-full bg-mint-400" aria-label="Attivo"></span>}
+                                    <Icon name={isAiSearching ? "loader-circle" : "radio"} className={`w-4 h-4 text-mint-400 ${isAiSearching ? 'animate-spin' : ''}`} />
+                                    <span>Live Web</span>
+                                    {liveData.scannedAt && <span className="w-2 h-2 rounded-full bg-coral-500 animate-pulse" aria-label="Dati aggiornati"></span>}
                                 </button>
                                 <button
                                     onClick={() => goTo("Info & Guida")}
@@ -1210,18 +1276,25 @@
                                 </div>
 
                                 {/* 3. WEB SEARCH WITH GEMINI */}
-                                <div className="mt-4 pt-4 border-t border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                                    <p className="text-xs text-slate-400">
-                                        <strong className="text-sun-400 font-bold">{filteredPlaces.length}</strong> mete trovate. Vuoi idee aggiornate per questa zona?
-                                    </p>
-                                    <button
-                                        onClick={handleSearchWebWithGemini}
-                                        disabled={isAiSearching}
-                                        className="w-full sm:w-auto h-11 px-5 rounded-2xl bg-gradient-to-r from-coral-500 to-sun-500 text-night-950 font-bold text-sm shadow-lg shadow-coral-500/25 hover:brightness-110 active:scale-[.98] transition inline-flex items-center justify-center gap-2 disabled:opacity-70"
-                                    >
-                                        <Icon name="wand-sparkles" className={`w-4 h-4 ${isAiSearching ? 'animate-pulse' : ''}`} />
-                                        <span>{isAiSearching ? 'Cerco sul web...' : 'Trova eventi con Gemini AI'}</span>
-                                    </button>
+                                <div className="mt-4 pt-4 border-t border-white/10 flex flex-col gap-3">
+                                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                                        <div className="flex flex-col gap-1.5">
+                                            <LiveStatusBadge isScanning={isAiSearching} scannedAt={liveData.scannedAt} error={scanError} />
+                                            <p className="text-xs text-slate-400">
+                                                <strong className="text-sun-400 font-bold">{filteredPlaces.length}</strong> mete trovate
+                                                {liveData.places.length > 0 && <> &middot; <strong className="text-coral-300">{liveData.places.length}</strong> dal web per {liveData.zone}</>}
+                                            </p>
+                                        </div>
+                                        <button
+                                            onClick={handleSearchWebWithGemini}
+                                            disabled={isAiSearching}
+                                            className="w-full sm:w-auto h-11 px-5 rounded-2xl bg-gradient-to-r from-coral-500 to-sun-500 text-night-950 font-bold text-sm shadow-lg shadow-coral-500/25 hover:brightness-110 active:scale-[.98] transition inline-flex items-center justify-center gap-2 disabled:opacity-70"
+                                        >
+                                            <Icon name="zap" className={`w-4 h-4 ${isAiSearching ? 'animate-pulse' : ''}`} />
+                                            <span>{isAiSearching ? 'Scansione del web...' : 'Cerca Eventi Live sul Web'}</span>
+                                        </button>
+                                    </div>
+                                    {liveData.creators.length > 0 && <CreatorStrip creators={liveData.creators} zone={liveData.zone} />}
                                 </div>
                             </section>
                         )}
@@ -1479,6 +1552,11 @@
                                                     <Icon name="users" className="w-4 h-4 text-mint-400" />Facebook
                                                 </a>
                                             )}
+                                            {activeDetailModal.sourceUrl && (
+                                                <a href={activeDetailModal.sourceUrl} target="_blank" rel="noopener noreferrer" className="h-10 px-4 rounded-full bg-coral-500/15 border border-coral-500/40 text-coral-300 text-xs font-semibold inline-flex items-center gap-2 hover:bg-coral-500/25">
+                                                    <Icon name="globe" className="w-4 h-4" />Fonte web
+                                                </a>
+                                            )}
                                         </div>
 
                                         {/* AI Itinerary */}
@@ -1560,54 +1638,30 @@
 
                                 <div className="flex items-center gap-3 mb-5">
                                     <span className="grid place-items-center w-12 h-12 rounded-2xl bg-mint-500/15 border border-mint-500/30 text-mint-400">
-                                        <Icon name="bot" className="w-6 h-6" />
+                                        <Icon name="radio" className="w-6 h-6" />
                                     </span>
                                     <div>
-                                        <h3 id="settings-title" className="font-display text-xl font-semibold text-white">Gemini AI</h3>
-                                        <p className="text-xs text-slate-400">Configura la tua API Key gratuita</p>
+                                        <h3 id="settings-title" className="font-display text-xl font-semibold text-white">Scansione Live con Gemini</h3>
+                                        <p className="text-xs text-slate-400">Ricerca web automatica, nessuna chiave richiesta</p>
                                     </div>
                                 </div>
 
-                                <div className="space-y-4 text-sm">
-                                    <div>
-                                        <label htmlFor="apikey" className="block text-slate-300 font-medium mb-1.5 text-xs">Google Gemini API Key</label>
-                                        <input
-                                            id="apikey"
-                                            type="password"
-                                            autoComplete="off"
-                                            placeholder="Incolla la tua API Key qui..."
-                                            value={apiKey}
-                                            onChange={(e) => setApiKey(e.target.value)}
-                                            className="w-full glass-input rounded-2xl px-4 h-12 font-mono"
-                                        />
-                                        <p className="mt-1.5 text-[11px] text-slate-400">
-                                            Puoi ottenerla gratis su <a href="https://aistudio.google.com/" target="_blank" rel="noopener noreferrer" className="text-coral-300 underline">Google AI Studio</a>.
-                                        </p>
-                                    </div>
-
-                                    <div>
-                                        <label htmlFor="model" className="block text-slate-300 font-medium mb-1.5 text-xs">Modello</label>
-                                        <select id="model" value={aiModel} onChange={(e) => setAiModel(e.target.value)} className="w-full glass-input rounded-2xl px-4 h-12">
-                                            <option value="gemini-2.5-flash">Gemini 2.5 Flash (veloce)</option>
-                                            <option value="gemini-2.5-pro">Gemini 2.5 Pro (preciso)</option>
-                                        </select>
-                                    </div>
-
-                                    <div className="pt-2 grid grid-cols-2 gap-2">
-                                        <button
-                                            onClick={() => { setApiKey(''); showToast("API Key rimossa"); }}
-                                            disabled={!apiKey}
-                                            className="h-12 rounded-2xl bg-white/5 border border-white/10 text-slate-200 font-semibold disabled:opacity-40"
-                                        >
-                                            Rimuovi key
-                                        </button>
-                                        <button
-                                            onClick={() => { setShowSettingsModal(false); showToast("Impostazioni Gemini salvate!"); }}
-                                            className="h-12 rounded-2xl bg-coral-500 text-white font-bold hover:bg-coral-600"
-                                        >
-                                            Salva
-                                        </button>
-                                    </div>
+                                <div className="flex flex-col gap-4 text-sm">
+                                    <LiveStatusBadge isScanning={isAiSearching} scannedAt={liveData.scannedAt} error={scanError} />
+                                    <ul className="flex flex-col gap-2 text-xs text-slate-300 leading-relaxed">
+                                        <li className="flex gap-2"><Icon name="refresh-cw" className="w-4 h-4 shrink-0 text-mint-400" />Si aggiorna da solo all&apos;avvio e quando cambi Regione o Città.</li>
+                                        <li className="flex gap-2"><Icon name="shield-check" className="w-4 h-4 shrink-0 text-mint-400" />Ogni link viene verificato online: quelli rotti vengono scartati.</li>
+                                        <li className="flex gap-2"><Icon name="file-text" className="w-4 h-4 shrink-0 text-mint-400" />Programmi dettagliati della gita ed esportazione PDF.</li>
+                                    </ul>
+                                    {liveData.creators.length > 0 && <CreatorStrip creators={liveData.creators} zone={liveData.zone} />}
+                                    <button
+                                        onClick={() => { setShowSettingsModal(false); handleSearchWebWithGemini(); }}
+                                        disabled={isAiSearching}
+                                        className="h-12 rounded-2xl bg-coral-500 text-white font-bold hover:bg-coral-600 inline-flex items-center justify-center gap-2 disabled:opacity-60"
+                                    >
+                                        <Icon name="zap" className="w-4 h-4" />
+                                        Cerca Eventi Live sul Web
+                                    </button>
                                 </div>
                             </div>
                         </div>
@@ -1627,7 +1681,7 @@
                             {[
                                 { id: "Tutti", label: "Esplora", icon: "compass", action: () => goTo("Tutti"), active: !["I Miei Preferiti", "Info & Guida"].includes(activeTab) },
                                 { id: "fav", label: "Preferiti", icon: "heart", action: () => goTo("I Miei Preferiti"), active: activeTab === "I Miei Preferiti", badge: favorites.length },
-                                { id: "ai", label: "AI", icon: "bot", action: () => setShowSettingsModal(true), active: showSettingsModal, dot: !!apiKey },
+                                { id: "ai", label: "Live", icon: "radio", action: () => setShowSettingsModal(true), active: showSettingsModal, dot: !!liveData.scannedAt },
                                 { id: "guide", label: "Guida", icon: "circle-help", action: () => goTo("Info & Guida"), active: activeTab === "Info & Guida" },
                             ].map(item => (
                                 <button
