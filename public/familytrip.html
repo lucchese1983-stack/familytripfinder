@@ -794,8 +794,29 @@
         // Main App Component
         function App() {
             // State
-            const [liveData, setLiveData] = useState({ places: [], creators: [], zone: "", scannedAt: null });
-            const places = useMemo(() => [...liveData.places, ...INITIAL_PLACES], [liveData.places]);
+            const SCAN_CACHE_STORAGE = 'familytrip_scan_cache';
+            const readJSON = (k) => { try { return JSON.parse(localStorage.getItem(k)) || {}; } catch { return {}; } };
+            const scanCacheRef = useRef(null);
+            if (!scanCacheRef.current) scanCacheRef.current = new Map(Object.entries(readJSON(SCAN_CACHE_STORAGE)));
+            const newestScans = () => [...scanCacheRef.current.values()]
+                .filter(s => s && Array.isArray(s.places))
+                .sort((a, b) => new Date(b.scannedAt) - new Date(a.scannedAt));
+            const [liveData, setLiveData] = useState(() => {
+                const loc = readJSON('familytrip_last_location');
+                const sameZone = scanCacheRef.current.get(`${loc.region || 'Tutte'}|${loc.city || 'Tutte'}`);
+                return sameZone || newestScans()[0] || { places: [], creators: [], zone: "", scannedAt: null };
+            });
+            const places = useMemo(() => {
+                const seen = new Set();
+                const recent = [liveData, ...newestScans()].flatMap(s => s.places || []);
+                const unique = recent.filter(p => {
+                    const k = `${p.title}|${p.city}`.toLowerCase();
+                    if (seen.has(k)) return false;
+                    seen.add(k);
+                    return true;
+                });
+                return [...unique, ...INITIAL_PLACES];
+            }, [liveData]);
             const [favorites, setFavorites] = useState(() => {
                 const saved = localStorage.getItem('familytrip_favs');
                 return saved ? JSON.parse(saved) : [];
@@ -825,11 +846,7 @@
 
             const [isAiSearching, setIsAiSearching] = useState(false);
             const [scanError, setScanError] = useState("");
-            const SCAN_CACHE_STORAGE = 'familytrip_scan_cache';
             const QUOTA_STORAGE = 'familytrip_quota_until';
-            const readJSON = (k) => { try { return JSON.parse(localStorage.getItem(k)) || {}; } catch { return {}; } };
-            const scanCacheRef = useRef(null);
-            if (!scanCacheRef.current) scanCacheRef.current = new Map(Object.entries(readJSON(SCAN_CACHE_STORAGE)));
             const saveScan = (key, data) => {
                 const cache = scanCacheRef.current;
                 cache.set(key, data);
