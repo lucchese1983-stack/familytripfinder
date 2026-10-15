@@ -1,0 +1,16 @@
+{
+  "name": "FamilyTrip Finder",
+  "short_name": "FamilyTrip",
+  "description": "Gite fuori porta, sagre, parchi ed eventi per famiglie con bambini in tutta Italia.",
+  "lang": "it",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0b1026",
+  "theme_color": "#0b1026",
+  "icons": [
+    { "src": "/app-icon.png", "sizes": "1024x1024", "type": "image/png", "purpose": "any" },
+    { "src": "/app-icon.png", "sizes": "1024x1024", "type": "image/png", "purpose": "maskable" }
+  ]
+}
