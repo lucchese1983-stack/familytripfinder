@@ -822,6 +822,29 @@
             const [gpsLoading, setGpsLoading] = useState(false);
             const [toastMessage, setToastMessage] = useState("");
 
+            const GEMINI_KEY_STORAGE = 'familytrip_gemini_key';
+            const [geminiKey, setGeminiKey] = useState(() => localStorage.getItem(GEMINI_KEY_STORAGE) || "");
+            const [keyDraft, setKeyDraft] = useState("");
+            const [isEditingKey, setIsEditingKey] = useState(false);
+            const geminiKeyRef = useRef(geminiKey);
+            geminiKeyRef.current = geminiKey;
+
+            const aiHeaders = () => ({ 'Content-Type': 'application/json', 'x-gemini-key': geminiKeyRef.current });
+
+            const askForKey = (msg) => {
+                setIsEditingKey(true);
+                setShowSettingsModal(true);
+                if (msg) showToast(msg);
+            };
+
+            const forgetKeyIfRejected = (res, data) => {
+                if (res.status === 401 || data.code === 'gemini_key_missing' || data.code === 'gemini_key_invalid') {
+                    localStorage.removeItem(GEMINI_KEY_STORAGE);
+                    setGeminiKey("");
+                    askForKey();
+                }
+            };
+
             useEffect(() => {
                 localStorage.removeItem('familytrip_places');
                 localStorage.removeItem('gemini_api_key');
@@ -892,6 +915,10 @@
             const SCAN_TTL_MS = 15 * 60 * 1000;
 
             const runLiveScan = async ({ force = false } = {}) => {
+                if (!geminiKeyRef.current) {
+                    if (force) askForKey();
+                    return;
+                }
                 const key = `${selectedRegion}|${selectedCity}`;
                 const cached = scanCacheRef.current.get(key);
                 if (!force && cached && Date.now() - new Date(cached.scannedAt).getTime() < SCAN_TTL_MS) {
@@ -910,12 +937,15 @@
                 try {
                     const res = await fetch('/api/live-scan', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: aiHeaders(),
                         body: JSON.stringify({ region: selectedRegion, city: selectedCity }),
                         signal: controller.signal,
                     });
                     const data = await res.json();
-                    if (!res.ok) throw new Error(data.error || 'Scansione non riuscita');
+                    if (!res.ok) {
+                        forgetKeyIfRejected(res, data);
+                        throw new Error(data.error || 'Scansione non riuscita');
+                    }
                     scanCacheRef.current.set(key, data);
                     setLiveData(data);
                     if (force) showToast(`${data.places.length} mete aggiornate dal web`);
@@ -930,22 +960,54 @@
 
             const handleSearchWebWithGemini = () => runLiveScan({ force: true });
 
+            const saveGeminiKey = (e) => {
+                e.preventDefault();
+                const value = keyDraft.trim();
+                if (value.length < 20) {
+                    showToast("La chiave sembra incompleta: copiala di nuovo da AI Studio.");
+                    return;
+                }
+                localStorage.setItem(GEMINI_KEY_STORAGE, value);
+                geminiKeyRef.current = value;
+                setGeminiKey(value);
+                setKeyDraft("");
+                setIsEditingKey(false);
+                setShowSettingsModal(false);
+                scanCacheRef.current.clear();
+                runLiveScan({ force: true });
+            };
+
+            const removeGeminiKey = () => {
+                localStorage.removeItem(GEMINI_KEY_STORAGE);
+                geminiKeyRef.current = "";
+                setGeminiKey("");
+                setIsEditingKey(true);
+                showToast("Chiave rimossa da questo dispositivo");
+            };
+
             useEffect(() => {
                 const t = setTimeout(() => runLiveScan(), 600);
                 return () => clearTimeout(t);
             }, [selectedRegion, selectedCity]);
 
             const generateAIItinerary = async (place) => {
+                if (!geminiKeyRef.current) {
+                    askForKey("Inserisci la tua chiave Gemini per creare il programma");
+                    return;
+                }
                 setIsGeneratingItinerary(true);
                 setAiItinerary(null);
                 try {
                     const res = await fetch('/api/itinerary', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: aiHeaders(),
                         body: JSON.stringify({ title: place.title, city: place.city, region: place.region, address: place.address, minAge: place.minAge }),
                     });
                     const data = await res.json();
-                    if (!res.ok) throw new Error(data.error || 'Errore');
+                    if (!res.ok) {
+                        forgetKeyIfRejected(res, data);
+                        throw new Error(data.error || 'Errore');
+                    }
                     setAiItinerary(data.itinerary);
                 } catch (err) {
                     showToast(err.message);
@@ -1642,10 +1704,42 @@
                                     </span>
                                     <div>
                                         <h3 id="settings-title" className="font-display text-xl font-semibold text-white">Scansione Live con Gemini</h3>
-                                        <p className="text-xs text-slate-400">Ricerca web automatica, nessuna chiave richiesta</p>
+                                        <p className="text-xs text-slate-400">{geminiKey ? "Chiave salvata su questo dispositivo" : "Usa la tua chiave Gemini gratuita"}</p>
                                     </div>
                                 </div>
 
+                                {(!geminiKey || isEditingKey) ? (
+                                    <form onSubmit={saveGeminiKey} className="flex flex-col gap-3 text-sm">
+                                        <label htmlFor="gemini-key" className="text-xs font-semibold text-slate-200">Chiave API Gemini</label>
+                                        <input
+                                            id="gemini-key"
+                                            type="password"
+                                            autoComplete="off"
+                                            spellCheck={false}
+                                            autoFocus
+                                            value={keyDraft}
+                                            onChange={(e) => setKeyDraft(e.target.value)}
+                                            placeholder="AIza..."
+                                            className="h-12 w-full rounded-2xl bg-white/5 border border-white/15 px-4 text-base text-white placeholder:text-slate-500 focus:outline-none focus:border-mint-400"
+                                        />
+                                        <p className="text-xs text-slate-400 leading-relaxed">
+                                            Creala gratis su{" "}
+                                            <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-mint-400 underline">aistudio.google.com</a>.
+                                            {" "}Resta salvata solo su questo telefono e viene usata solo per le tue scansioni.
+                                        </p>
+                                        <div className="flex gap-2">
+                                            {geminiKey && (
+                                                <button type="button" onClick={() => { setIsEditingKey(false); setKeyDraft(""); }} className="h-12 flex-1 rounded-2xl bg-white/5 border border-white/10 text-slate-200 font-semibold">
+                                                    Annulla
+                                                </button>
+                                            )}
+                                            <button type="submit" className="h-12 flex-[2] rounded-2xl bg-coral-500 text-white font-bold hover:bg-coral-600 inline-flex items-center justify-center gap-2">
+                                                <Icon name="zap" className="w-4 h-4" />
+                                                Salva e cerca live
+                                            </button>
+                                        </div>
+                                    </form>
+                                ) : (
                                 <div className="flex flex-col gap-4 text-sm">
                                     <LiveStatusBadge isScanning={isAiSearching} scannedAt={liveData.scannedAt} error={scanError} />
                                     <ul className="flex flex-col gap-2 text-xs text-slate-300 leading-relaxed">
@@ -1662,7 +1756,12 @@
                                         <Icon name="zap" className="w-4 h-4" />
                                         Cerca Eventi Live sul Web
                                     </button>
+                                    <div className="flex items-center justify-between text-xs">
+                                        <button onClick={() => setIsEditingKey(true)} className="text-slate-300 underline py-2">Cambia chiave</button>
+                                        <button onClick={removeGeminiKey} className="text-slate-400 underline py-2">Rimuovi dal dispositivo</button>
+                                    </div>
                                 </div>
+                                )}
                             </div>
                         </div>
                     )}

@@ -4,7 +4,7 @@ export function aiErrorResponse(error: unknown, fallback: string) {
     return Response.json(
       {
         error:
-          "Gemini non configurato: aggiungi la variabile GOOGLE_GENERATIVE_AI_API_KEY (chiave gratuita da aistudio.google.com) nelle impostazioni Vars del progetto.",
+          "Serve la tua chiave Gemini: inseriscila nel pannello Live (gratis da aistudio.google.com).",
         code: "gemini_key_missing",
       },
       { status: 402 },
@@ -12,7 +12,7 @@ export function aiErrorResponse(error: unknown, fallback: string) {
   }
   if (/api key not valid|API_KEY_INVALID|permission denied/i.test(message)) {
     return Response.json(
-      { error: "La chiave Gemini non è valida: controlla GOOGLE_GENERATIVE_AI_API_KEY.", code: "gemini_key_invalid" },
+      { error: "La chiave Gemini non è valida: inseriscine una nuova nel pannello Live.", code: "gemini_key_invalid" },
       { status: 401 },
     )
   }

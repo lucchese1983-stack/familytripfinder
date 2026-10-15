@@ -1,6 +1,6 @@
 import { generateText, isStepCount } from "ai"
 import { z } from "zod"
-import { getModel, getSearchTools } from "@/lib/ai"
+import { getAI } from "@/lib/ai"
 import { aiErrorResponse } from "@/lib/ai-error"
 
 export const maxDuration = 90
@@ -21,9 +21,10 @@ export async function POST(req: Request) {
   const place = parsed.data
 
   try {
+    const { model, searchTools } = getAI(req)
     const { text } = await generateText({
-      model: getModel(),
-      tools: getSearchTools(5),
+      model,
+      tools: searchTools(5),
       stopWhen: isStepCount(4),
       system:
         "Sei un organizzatore di gite per famiglie. Cerca sul web orari, prezzi e info aggiornate prima di rispondere. Scrivi in italiano, in testo semplice: titoli di sezione su righe proprie che iniziano con '## ', elenchi con '- '. Niente emoji, niente tabelle.",

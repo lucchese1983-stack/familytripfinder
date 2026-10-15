@@ -1,6 +1,6 @@
 import { generateText, isStepCount, Output } from "ai"
 import { z } from "zod"
-import { getModel, getSearchTools } from "@/lib/ai"
+import { getAI } from "@/lib/ai"
 import { aiErrorResponse } from "@/lib/ai-error"
 import { verifyLinks } from "@/lib/verify-links"
 
@@ -64,13 +64,13 @@ export async function POST(req: Request) {
   const today = new Date().toLocaleDateString("it-IT", { day: "numeric", month: "long", year: "numeric" })
 
   try {
-    const model = getModel()
+    const { model, searchTools } = getAI(req)
 
     // Search grounding and structured output are split into two calls because
     // Gemini's native Google Search tool can't be combined with a response schema on every model.
     const research = await generateText({
       model,
-      tools: getSearchTools(8),
+      tools: searchTools(8),
       stopWhen: isStepCount(6),
       system:
         "Sei un redattore esperto di gite ed eventi per famiglie con bambini in Italia. Cerca SEMPRE sul web prima di rispondere. Riporta solo informazioni verificate, indicando per ogni voce l'URL reale della fonte, del profilo Instagram e della pagina Facebook ufficiali quando li trovi. Non inventare mai link. Scrivi in italiano.",
