@@ -846,7 +846,6 @@
 
             const [isAiSearching, setIsAiSearching] = useState(false);
             const [scanError, setScanError] = useState("");
-            const QUOTA_STORAGE = 'familytrip_quota_until';
             const saveScan = (key, data) => {
                 const cache = scanCacheRef.current;
                 cache.set(key, data);
@@ -856,12 +855,6 @@
                 scanCacheRef.current = new Map(newest);
                 try { localStorage.setItem(SCAN_CACHE_STORAGE, JSON.stringify(Object.fromEntries(newest))); } catch {}
             };
-            const isQuotaPaused = (provider) => (readJSON(QUOTA_STORAGE)[provider] || 0) > Date.now();
-            const pauseQuota = (provider, ms = 60 * 60 * 1000) => {
-                const all = readJSON(QUOTA_STORAGE);
-                all[provider] = Date.now() + ms;
-                localStorage.setItem(QUOTA_STORAGE, JSON.stringify(all));
-            };
             const scanAbortRef = useRef(null);
             const scanInFlightKeyRef = useRef("");
             const [aiItinerary, setAiItinerary] = useState(null);
@@ -869,35 +862,16 @@
             const [gpsLoading, setGpsLoading] = useState(false);
             const [toastMessage, setToastMessage] = useState("");
 
-            const PROVIDER_STORAGE = 'familytrip_ai_provider';
-            const KEY_STORAGE = { gemini: 'familytrip_gemini_key', groq: 'familytrip_groq_key' };
-            const PROVIDERS = {
-                gemini: { label: 'Gemini', placeholder: 'AIza...', site: 'aistudio.google.com', url: 'https://aistudio.google.com/app/apikey', note: 'Ricerca Google integrata' },
-                groq: { label: 'Groq', placeholder: 'gsk_...', site: 'console.groq.com', url: 'https://console.groq.com/keys', note: 'Molto veloce, ricerca web inclusa' },
-            };
-            const [aiProvider, setAiProvider] = useState(() => localStorage.getItem(PROVIDER_STORAGE) === 'groq' ? 'groq' : 'gemini');
-            const [geminiKey, setGeminiKey] = useState(() => localStorage.getItem(KEY_STORAGE[aiProvider]) || "");
+            const GEMINI_KEY_STORAGE = 'familytrip_gemini_key';
+            const providerInfo = { label: 'Gemini', placeholder: 'AIza...', site: 'aistudio.google.com', url: 'https://aistudio.google.com/app/apikey' };
+            const [geminiKey, setGeminiKey] = useState(() => localStorage.getItem(GEMINI_KEY_STORAGE) || "");
             const [keyDraft, setKeyDraft] = useState("");
             const [isEditingKey, setIsEditingKey] = useState(false);
             const geminiKeyRef = useRef(geminiKey);
             geminiKeyRef.current = geminiKey;
-            const providerRef = useRef(aiProvider);
-            providerRef.current = aiProvider;
-            const providerInfo = PROVIDERS[aiProvider];
 
-            const aiHeaders = () => ({ 'Content-Type': 'application/json', 'x-ai-provider': providerRef.current, 'x-ai-key': geminiKeyRef.current });
-
-            const switchProvider = (next) => {
-                if (next === providerRef.current) return;
-                const storedKey = localStorage.getItem(KEY_STORAGE[next]) || "";
-                localStorage.setItem(PROVIDER_STORAGE, next);
-                providerRef.current = next;
-                geminiKeyRef.current = storedKey;
-                setAiProvider(next);
-                setGeminiKey(storedKey);
-                setKeyDraft("");
-                setIsEditingKey(!storedKey);
-            };
+            const aiHeaders = () => ({ 'Content-Type': 'application/json', 'x-ai-key': geminiKeyRef.current });
+            const errorText = (data, fallback) => data.detail ? `${data.error || fallback} (Google: ${data.detail})` : (data.error || fallback);
 
             const askForKey = (msg) => {
                 setIsEditingKey(true);
@@ -907,13 +881,16 @@
 
             const forgetKeyIfRejected = (res, data) => {
                 if (res.status === 401 || data.code === 'ai_key_missing' || data.code === 'ai_key_invalid') {
-                    localStorage.removeItem(KEY_STORAGE[providerRef.current]);
+                    localStorage.removeItem(GEMINI_KEY_STORAGE);
                     setGeminiKey("");
                     askForKey();
                 }
             };
 
             useEffect(() => {
+                localStorage.removeItem('familytrip_quota_until');
+                localStorage.removeItem('familytrip_groq_key');
+                localStorage.removeItem('familytrip_ai_provider');
                 localStorage.removeItem('familytrip_places');
                 localStorage.removeItem('gemini_api_key');
                 localStorage.removeItem('gemini_model');
@@ -986,17 +963,7 @@
 
             const SCAN_TTL_MS = 12 * 60 * 60 * 1000;
 
-            const keyFor = (provider) => localStorage.getItem(KEY_STORAGE[provider]) || "";
-            const hasUsableKey = (provider) => !!keyFor(provider) && !isQuotaPaused(provider);
-            const quotaMessage = (cached) => `Quota gratuita esaurita: ${cached ? 'mostro le mete salvate' : 'mostro il catalogo'}. Riprova più tardi.`;
-
-            const pickScanProvider = () => {
-                if (hasUsableKey('gemini')) return 'gemini';
-                if (hasUsableKey('groq')) return 'groq';
-                return null;
-            };
-
-            const runLiveScan = async ({ force = false, provider = null, isGroqFallback = false } = {}) => {
+            const runLiveScan = async ({ force = false } = {}) => {
                 const key = `${selectedRegion}|${selectedCity}`;
                 const cached = scanCacheRef.current.get(key);
                 if (!force && cached && Date.now() - new Date(cached.scannedAt).getTime() < SCAN_TTL_MS) {
@@ -1005,22 +972,13 @@
                     return;
                 }
 
-                if (!keyFor('gemini') && !keyFor('groq')) {
+                if (!geminiKeyRef.current) {
                     if (cached) setLiveData(cached);
                     if (force) askForKey();
                     return;
                 }
 
-                const scanProvider = provider || pickScanProvider();
-                if (!scanProvider) {
-                    if (cached) setLiveData(cached);
-                    const msg = quotaMessage(cached);
-                    setScanError(msg);
-                    if (force) showToast(msg);
-                    return;
-                }
-
-                if (!force && !isGroqFallback && scanInFlightKeyRef.current === key) return;
+                if (scanInFlightKeyRef.current === key) return;
 
                 scanAbortRef.current?.abort();
                 const controller = new AbortController();
@@ -1035,27 +993,15 @@
                 try {
                     const res = await fetch('/api/live-scan', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json', 'x-ai-provider': scanProvider, 'x-ai-key': keyFor(scanProvider) },
+                        headers: aiHeaders(),
                         body: JSON.stringify({ region: selectedRegion, city: selectedCity }),
                         signal: controller.signal,
                     });
-                    const data = await res.json();
+                    const data = await res.json().catch(() => ({}));
                     if (!res.ok) {
-                        if (data.code === 'ai_quota') {
-                            pauseQuota(scanProvider, scanProvider === 'gemini' ? 10 * 60 * 1000 : 60 * 60 * 1000);
-                            if (scanProvider === 'gemini' && !isGroqFallback && hasUsableKey('groq')) {
-                                showToast("Quota Google esaurita: provo una volta con Groq");
-                                clearTimeout(timeoutId);
-                                return runLiveScan({ force, provider: 'groq', isGroqFallback: true });
-                            }
-                            if (cached) setLiveData(cached);
-                        }
-                        if (res.status === 401 || data.code === 'ai_key_missing' || data.code === 'ai_key_invalid') {
-                            localStorage.removeItem(KEY_STORAGE[scanProvider]);
-                            if (scanProvider === providerRef.current) setGeminiKey("");
-                            askForKey();
-                        }
-                        throw new Error(data.code === 'ai_quota' ? quotaMessage(cached) : (data.error || 'Scansione non riuscita'));
+                        if (cached) setLiveData(cached);
+                        forgetKeyIfRejected(res, data);
+                        throw new Error(errorText(data, 'Scansione non riuscita'));
                     }
                     saveScan(key, data);
                     setLiveData(data);
@@ -1083,21 +1029,17 @@
                     showToast(`La chiave sembra incompleta: copiala di nuovo da ${providerInfo.site}.`);
                     return;
                 }
-                localStorage.setItem(KEY_STORAGE[providerRef.current], value);
-                localStorage.setItem(PROVIDER_STORAGE, providerRef.current);
+                localStorage.setItem(GEMINI_KEY_STORAGE, value);
                 geminiKeyRef.current = value;
                 setGeminiKey(value);
                 setKeyDraft("");
                 setIsEditingKey(false);
                 setShowSettingsModal(false);
-                const quota = readJSON(QUOTA_STORAGE);
-                delete quota[providerRef.current];
-                localStorage.setItem(QUOTA_STORAGE, JSON.stringify(quota));
                 runLiveScan({ force: true });
             };
 
             const removeGeminiKey = () => {
-                localStorage.removeItem(KEY_STORAGE[providerRef.current]);
+                localStorage.removeItem(GEMINI_KEY_STORAGE);
                 geminiKeyRef.current = "";
                 setGeminiKey("");
                 setIsEditingKey(true);
@@ -1123,10 +1065,10 @@
                         headers: aiHeaders(),
                         body: JSON.stringify({ title: place.title, city: place.city, region: place.region, address: place.address, minAge: place.minAge }),
                     });
-                    const data = await res.json();
+                    const data = await res.json().catch(() => ({}));
                     if (!res.ok) {
                         forgetKeyIfRejected(res, data);
-                        throw new Error(data.error || 'Errore');
+                        throw new Error(errorText(data, 'Errore'));
                     }
                     setAiItinerary(data.itinerary);
                 } catch (err) {
@@ -1528,7 +1470,7 @@
                                         <div className="rounded-2xl p-4 bg-coral-500/10 border border-coral-500/20">
                                             <h3 className="font-bold text-coral-300 mb-1.5 flex items-center gap-2">
                                                 <Icon name="sparkles" className="w-4 h-4" />
-                                                Gemini o Groq AI
+                                                Gemini AI
                                             </h3>
                                             <p className="text-xs text-slate-300">
                                                 Apri una meta e tocca &quot;Pianifica giornata&quot; per un programma completo dalla mattina alla sera.
@@ -1536,7 +1478,7 @@
                                         </div>
                                     </div>
                                     <p className="text-xs text-slate-400">
-                                        Tocca &quot;Live&quot; e inserisci una chiave gratuita Gemini o Groq per abilitare itinerari e ricerca live sul web. Se finisce la quota di una, passa all&apos;altra.
+                                        Tocca &quot;Live&quot; e inserisci una chiave gratuita Gemini (creala su aistudio.google.com) per abilitare itinerari e ricerca live sul web.
                                     </p>
                                     <button onClick={() => goTo("Tutti")} className="mt-2 h-11 px-5 rounded-2xl bg-white text-night-950 font-bold text-sm inline-flex items-center gap-2">
                                         <Icon name="compass" className="w-4 h-4 text-coral-500" />
@@ -1826,22 +1768,6 @@
                                         <h3 id="settings-title" className="font-display text-xl font-semibold text-white">Scansione Live con {providerInfo.label}</h3>
                                         <p className="text-xs text-slate-400">{geminiKey ? "Chiave salvata su questo dispositivo" : `Usa la tua chiave ${providerInfo.label} gratuita`}</p>
                                     </div>
-                                </div>
-
-                                <div role="radiogroup" aria-label="Scegli l'AI" className="grid grid-cols-2 gap-2 mb-5">
-                                    {Object.entries(PROVIDERS).map(([id, p]) => (
-                                        <button
-                                            key={id}
-                                            type="button"
-                                            role="radio"
-                                            aria-checked={aiProvider === id}
-                                            onClick={() => switchProvider(id)}
-                                            className={`flex flex-col items-start gap-0.5 rounded-2xl px-4 py-3 text-left border transition-colors ${aiProvider === id ? 'bg-mint-500/15 border-mint-400 text-white' : 'bg-white/5 border-white/10 text-slate-300 hover:border-white/25'}`}
-                                        >
-                                            <span className="font-bold text-sm">{p.label}</span>
-                                            <span className="text-[11px] leading-snug text-slate-400">{p.note}</span>
-                                        </button>
-                                    ))}
                                 </div>
 
                                 {(!geminiKey || isEditingKey) ? (

@@ -1,6 +1,6 @@
 import { generateText } from "ai"
 import { z } from "zod"
-import { getAI, getProvider, withModelFallback } from "@/lib/ai"
+import { getAI, runWithGemini } from "@/lib/ai"
 import { aiErrorResponse } from "@/lib/ai-error"
 import { verifyLinks } from "@/lib/verify-links"
 
@@ -79,11 +79,10 @@ export async function POST(req: Request) {
 
   try {
     // A single model call: the search tool runs inside it (provider-executed), so one scan = one API request.
-    const result = await withModelFallback(getAI(req), ({ model, searchTools, searchToolChoice }) =>
+    const result = await runWithGemini(getAI(req), (model, searchTools) =>
       generateText({
         model,
         tools: searchTools(5),
-        toolChoice: searchToolChoice,
         maxRetries: 0,
         abortSignal: AbortSignal.timeout(45_000),
         system:
@@ -126,6 +125,6 @@ Formato JSON:
     return Response.json({ places, creators, zone, scannedAt: new Date().toISOString() })
   } catch (error) {
     console.error("[live-scan]", error)
-    return aiErrorResponse(error, "Scansione web non riuscita. Riprova tra poco.", getProvider(req))
+    return aiErrorResponse(error, "Scansione web non riuscita. Riprova tra poco.")
   }
 }

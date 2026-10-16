@@ -1,6 +1,6 @@
 import { generateText } from "ai"
 import { z } from "zod"
-import { getAI, getProvider, withModelFallback } from "@/lib/ai"
+import { getAI, runWithGemini } from "@/lib/ai"
 import { aiErrorResponse } from "@/lib/ai-error"
 
 export const maxDuration = 90
@@ -21,11 +21,10 @@ export async function POST(req: Request) {
   const place = parsed.data
 
   try {
-    const { text } = await withModelFallback(getAI(req), ({ model, searchTools, searchToolChoice }) =>
+    const { text } = await runWithGemini(getAI(req), (model, searchTools) =>
       generateText({
       model,
       tools: searchTools(3),
-      toolChoice: searchToolChoice,
       maxRetries: 0,
       system:
         "Sei un organizzatore di gite per famiglie. Cerca sul web orari, prezzi e info aggiornate prima di rispondere. Scrivi in italiano, in testo semplice: titoli di sezione su righe proprie che iniziano con '## ', elenchi con '- '. Niente emoji, niente tabelle.",
@@ -36,6 +35,6 @@ Sezioni: ## Mattina, ## Pranzo, ## Pomeriggio, ## Info pratiche (orari e prezzi 
     return Response.json({ itinerary: text })
   } catch (error) {
     console.error("[itinerary]", error)
-    return aiErrorResponse(error, "Impossibile generare il programma.", getProvider(req))
+    return aiErrorResponse(error, "Impossibile generare il programma.")
   }
 }

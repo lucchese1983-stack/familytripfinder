@@ -1,55 +1,29 @@
 import { createGoogleGenerativeAI } from "@ai-sdk/google"
-import { createGroq } from "@ai-sdk/groq"
-import { gateway, type LanguageModel, type ToolChoice, type ToolSet } from "ai"
+import { gateway, type LanguageModel, type ToolSet } from "ai"
 
-// Flash-Lite has the most generous free-tier daily limits; Flash is the fallback if Lite is unavailable.
-const GEMINI_MODELS = ["gemini-3.5-flash-lite", "gemini-3.5-flash"] as const
-const GROQ_MODEL = "openai/gpt-oss-120b"
-
-export type AIProvider = "gemini" | "groq"
+// Tried in order. A model is skipped only when Google says it has no free quota ("limit: 0")
+// or doesn't exist / can't search: those rejections cost nothing, so the next model gets a fair chance.
+const GEMINI_MODELS = ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-3.5-flash-lite"] as const
 
 export type AIConfig = {
-  provider: AIProvider
-  model: LanguageModel
-  fallbackModel?: LanguageModel
+  models: LanguageModel[]
   searchTools: (maxResults: number) => ToolSet
-  searchToolChoice?: ToolChoice<ToolSet>
-}
-
-function readKey(req: Request, header: string) {
-  return req.headers.get(header)?.trim().slice(0, 200) || undefined
 }
 
 export function getAI(req: Request): AIConfig {
-  const requested = getProvider(req)
-  const userKey = readKey(req, "x-ai-key") ?? readKey(req, "x-gemini-key")
-
-  if (requested === "groq") {
-    const apiKey = userKey || process.env.GROQ_API_KEY
-    if (!apiKey) throw new Error("groq key missing")
-    const groq = createGroq({ apiKey })
-    return {
-      provider: "groq",
-      model: groq(GROQ_MODEL),
-      searchTools: () => ({ browser_search: groq.tools.browserSearch({}) }),
-      searchToolChoice: "required",
-    }
-  }
-
+  const userKey = req.headers.get("x-ai-key")?.trim().slice(0, 200) || undefined
   const apiKey = userKey || process.env.GOOGLE_GENERATIVE_AI_API_KEY
+
   if (apiKey) {
     const google = createGoogleGenerativeAI({ apiKey })
     return {
-      provider: "gemini",
-      model: google(GEMINI_MODELS[0]),
-      fallbackModel: google(GEMINI_MODELS[1]),
+      models: GEMINI_MODELS.map((id) => google(id)),
       searchTools: () => ({ google_search: google.tools.googleSearch({}) }),
     }
   }
 
   return {
-    provider: "gemini",
-    model: `google/${GEMINI_MODELS[0]}`,
+    models: [`google/${GEMINI_MODELS[0]}`],
     searchTools: (maxResults) => ({
       web_search: gateway.tools.perplexitySearch({
         maxResults,
@@ -61,19 +35,24 @@ export function getAI(req: Request): AIConfig {
   }
 }
 
-// Retries once on the fallback model only when the primary model doesn't exist (404), which costs no quota.
-export async function withModelFallback<T>(config: AIConfig, run: (c: AIConfig) => Promise<T>): Promise<T> {
-  try {
-    return await run(config)
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    if (config.fallbackModel && /not found|404|not supported/i.test(message)) {
-      return run({ ...config, model: config.fallbackModel, fallbackModel: undefined })
-    }
-    throw error
-  }
+function isSkippable(message: string) {
+  return /limit:\s*0\b|not found|404|not supported|is not available|unsupported/i.test(message)
 }
 
-export function getProvider(req: Request): AIProvider {
-  return req.headers.get("x-ai-provider") === "groq" ? "groq" : "gemini"
+export async function runWithGemini<T>(
+  config: AIConfig,
+  run: (model: LanguageModel, searchTools: AIConfig["searchTools"]) => Promise<T>,
+): Promise<T> {
+  let lastError: unknown
+  for (const model of config.models) {
+    try {
+      return await run(model, config.searchTools)
+    } catch (error) {
+      lastError = error
+      const message = error instanceof Error ? error.message : String(error)
+      console.error("[ai] model failed:", typeof model === "string" ? model : model.modelId, message.slice(0, 300))
+      if (!isSkippable(message)) throw error
+    }
+  }
+  throw lastError
 }
