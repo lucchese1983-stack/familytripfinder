@@ -864,8 +864,64 @@
             const [gpsLoading, setGpsLoading] = useState(false);
             const [toastMessage, setToastMessage] = useState("");
 
+            const GEMINI_KEY_STORAGE = 'familytrip_gemini_key';
+            const [geminiKey, setGeminiKey] = useState(() => localStorage.getItem(GEMINI_KEY_STORAGE) || "");
+            const geminiKeyRef = useRef(geminiKey);
+            geminiKeyRef.current = geminiKey;
+            const [showKeyModal, setShowKeyModal] = useState(false);
+            const [keyDraft, setKeyDraft] = useState("");
+            const [aiNotice, setAiNotice] = useState("");
+            const aiHeaders = () => ({ 'Content-Type': 'application/json', 'x-ai-key': geminiKeyRef.current });
+
+            const saveGeminiKey = (e) => {
+                e.preventDefault();
+                const value = keyDraft.trim();
+                if (value.length < 20) {
+                    showToast("La chiave sembra incompleta: copiala di nuovo da aistudio.google.com.");
+                    return;
+                }
+                localStorage.setItem(GEMINI_KEY_STORAGE, value);
+                geminiKeyRef.current = value;
+                setGeminiKey(value);
+                setKeyDraft("");
+                setShowKeyModal(false);
+                showToast("Gemini attivo: cerco eventi sul web");
+                runLiveScan({ force: true });
+            };
+
+            const removeGeminiKey = () => {
+                localStorage.removeItem(GEMINI_KEY_STORAGE);
+                geminiKeyRef.current = "";
+                setGeminiKey("");
+                setAiNotice("");
+                setShowKeyModal(false);
+                showToast("Chiave Gemini rimossa");
+            };
+
+            const forgetKeyIfRejected = (data) => {
+                if (data?.code === 'ai_key_invalid') {
+                    localStorage.removeItem(GEMINI_KEY_STORAGE);
+                    geminiKeyRef.current = "";
+                    setGeminiKey("");
+                }
+            };
+
+            const fetchGeminiScan = async (signal) => {
+                const res = await fetch('/api/live-scan', {
+                    method: 'POST',
+                    headers: aiHeaders(),
+                    body: JSON.stringify({ region: selectedRegion === "Tutte" ? (gpsRef.current?.region || "Tutte") : selectedRegion, city: selectedCity }),
+                    signal,
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) {
+                    forgetKeyIfRejected(data);
+                    throw new Error(data.error || "Gemini non ha risposto");
+                }
+                return data;
+            };
+
             useEffect(() => {
-                localStorage.removeItem('familytrip_gemini_key');
                 localStorage.removeItem('familytrip_quota_until');
                 localStorage.removeItem('familytrip_groq_key');
                 localStorage.removeItem('familytrip_ai_provider');
@@ -980,17 +1036,42 @@
                 setScanError("");
 
                 try {
+                    const useGemini = Boolean(geminiKeyRef.current);
+                    const geminiPromise = useGemini ? fetchGeminiScan(controller.signal) : null;
                     const target = await resolveZone(controller.signal);
-                    if (!target) {
+                    if (!target && !useGemini) {
                         if (force) showToast("Scegli una Regione o attiva la posizione per cercare intorno a te.");
                         return;
                     }
-                    const data = await window.FamilyLive.scanZone({
-                        ...target,
-                        region: selectedRegion === "Tutte" ? (gpsRef.current?.region || "Tutte") : selectedRegion,
-                        city: selectedCity === "Tutte" ? "" : selectedCity,
-                        signal: controller.signal,
-                    });
+                    const [freeResult, aiResult] = await Promise.allSettled([
+                        target
+                            ? window.FamilyLive.scanZone({
+                                ...target,
+                                region: selectedRegion === "Tutte" ? (gpsRef.current?.region || "Tutte") : selectedRegion,
+                                city: selectedCity === "Tutte" ? "" : selectedCity,
+                                signal: controller.signal,
+                            })
+                            : Promise.resolve(null),
+                        geminiPromise || Promise.resolve(null),
+                    ]);
+                    if (controller.signal.aborted) return;
+                    const free = freeResult.status === 'fulfilled' ? freeResult.value : null;
+                    const ai = aiResult.status === 'fulfilled' ? aiResult.value : null;
+                    if (useGemini) setAiNotice(aiResult.status === 'rejected' ? `Gemini: ${aiResult.reason?.message || 'non disponibile'}. Mostro le fonti gratuite.` : "");
+                    if (!free && !ai) throw freeResult.reason || aiResult.reason || new Error("scan failed");
+                    const seenTitles = new Set();
+                    const data = {
+                        places: [...(ai?.places || []), ...(free?.places || [])].filter(p => {
+                            const k = `${p.title}|${p.city}`.toLowerCase();
+                            if (seenTitles.has(k)) return false;
+                            seenTitles.add(k);
+                            return true;
+                        }),
+                        creators: [...(ai?.creators || []), ...(free?.creators || [])],
+                        zone: free?.zone || ai?.zone || "",
+                        scannedAt: new Date().toISOString(),
+                        ai: Boolean(ai),
+                    };
                     if (data.places.length === 0) {
                         setScanError(cached ? "" : "Nessuna nuova meta trovata in zona: ecco il catalogo.");
                         if (force) showToast("Nessuna nuova meta trovata, riprova tra poco.");
@@ -1029,13 +1110,50 @@
                 if (cached) setLiveData(cached);
             }, [selectedRegion, selectedCity]);
 
-            const generateAIItinerary = (place) => {
+            const parseItineraryText = (text) => {
+                const sections = [];
+                for (const raw of String(text).split('\n')) {
+                    const line = raw.replace(/\*\*/g, '').trim();
+                    if (!line) continue;
+                    if (line.startsWith('#')) {
+                        sections.push({ title: line.replace(/^#+\s*/, ''), items: [] });
+                        continue;
+                    }
+                    if (!sections.length) sections.push({ title: "Programma", items: [] });
+                    const body = line.replace(/^[-*•]\s*/, '');
+                    const m = body.match(/^(\d{1,2}[:.]\d{2})\s*[-–:]?\s*(.*)$/);
+                    sections[sections.length - 1].items.push(m ? { time: m[1].replace('.', ':'), text: m[2] } : { text: body });
+                }
+                return { sections: sections.filter(s => s.items.length) };
+            };
+
+            const generateAIItinerary = async (place) => {
                 setIsGeneratingItinerary(true);
                 setAiItinerary(null);
-                setTimeout(() => {
-                    setAiItinerary(window.FamilyLive.buildDayPlan(place, places));
+                const localPlan = () => window.FamilyLive.buildDayPlan(place, places);
+                if (!geminiKeyRef.current) {
+                    setTimeout(() => { setAiItinerary(localPlan()); setIsGeneratingItinerary(false); }, 350);
+                    return;
+                }
+                try {
+                    const res = await fetch('/api/itinerary', {
+                        method: 'POST',
+                        headers: aiHeaders(),
+                        body: JSON.stringify({ title: place.title, city: place.city || "", region: place.region || "", address: place.address || undefined, minAge: place.minAge || undefined }),
+                    });
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok) {
+                        forgetKeyIfRejected(data);
+                        throw new Error(data.error || "Gemini non ha risposto");
+                    }
+                    const plan = parseItineraryText(data.itinerary);
+                    setAiItinerary(plan.sections.length ? { ...plan, ai: true } : localPlan());
+                } catch (err) {
+                    showToast(`${err.message} Uso il programma base.`);
+                    setAiItinerary(localPlan());
+                } finally {
                     setIsGeneratingItinerary(false);
-                }, 350);
+                }
             };
 
             const exportItineraryPDF = (place) => {
@@ -1141,6 +1259,50 @@
                 <div className="min-h-screen flex flex-col pb-24 md:pb-10">
 
                     {/* Toast Notification */}
+                    {showKeyModal && (
+                        <div className="fixed inset-0 z-[55] bg-night-950/70 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={() => setShowKeyModal(false)} role="dialog" aria-modal="true" aria-labelledby="gemini-title">
+                            <div className="sheet-in glass-modal w-full sm:max-w-md rounded-t-[2rem] sm:rounded-3xl p-5 sm:p-6 shadow-2xl relative pb-safe flex flex-col gap-4" onClick={(e) => e.stopPropagation()}>
+                                <button onClick={() => setShowKeyModal(false)} className="absolute top-4 right-4 grid place-items-center w-10 h-10 rounded-full bg-white/5 border border-white/10 text-slate-300 hover:text-white" aria-label="Chiudi">
+                                    <Icon name="x" className="w-5 h-5" />
+                                </button>
+                                <div className="flex items-center gap-3 pr-10">
+                                    <span className="grid place-items-center w-12 h-12 rounded-2xl bg-mint-500/15 border border-mint-500/30 text-mint-400">
+                                        <Icon name="bot" className="w-6 h-6" />
+                                    </span>
+                                    <div>
+                                        <h3 id="gemini-title" className="font-display text-xl font-semibold text-white">AI Gemini</h3>
+                                        <p className="text-xs text-slate-400">{geminiKey ? "Attivo su questo dispositivo" : "Ricerca eventi sul web e programmi su misura"}</p>
+                                    </div>
+                                </div>
+                                <form onSubmit={saveGeminiKey} className="flex flex-col gap-3 text-sm">
+                                    <label htmlFor="gemini-key" className="text-xs font-semibold text-slate-200">{geminiKey ? "Sostituisci chiave API Gemini" : "Chiave API Gemini"}</label>
+                                    <input
+                                        id="gemini-key"
+                                        type="password"
+                                        autoComplete="off"
+                                        spellCheck={false}
+                                        value={keyDraft}
+                                        onChange={(e) => setKeyDraft(e.target.value)}
+                                        placeholder={geminiKey ? "••••••••••••" : "AIza..."}
+                                        className="h-12 w-full rounded-2xl bg-white/5 border border-white/15 px-4 text-base text-white placeholder:text-slate-500 focus:outline-none focus:border-mint-400"
+                                    />
+                                    <p className="text-xs text-slate-400 leading-relaxed">
+                                        Creala gratis su{" "}
+                                        <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" className="text-mint-400 underline">aistudio.google.com</a>.
+                                        {" "}Resta salvata solo su questo telefono. Se Gemini non risponde, l&apos;app usa comunque mappe e giornali gratuiti.
+                                    </p>
+                                    <button type="submit" className="h-12 rounded-2xl bg-coral-500 text-white font-bold hover:bg-coral-600 inline-flex items-center justify-center gap-2">
+                                        <Icon name="zap" className="w-4 h-4" />
+                                        Salva e cerca con Gemini
+                                    </button>
+                                    {geminiKey && (
+                                        <button type="button" onClick={removeGeminiKey} className="text-xs text-slate-400 underline py-2 self-center">Disattiva Gemini e rimuovi chiave</button>
+                                    )}
+                                </form>
+                            </div>
+                        </div>
+                    )}
+
                     {toastMessage && (
                         <div className="fixed z-[60] left-4 right-4 bottom-24 md:left-auto md:right-6 md:bottom-6 flex justify-center md:justify-end pointer-events-none" role="status" aria-live="polite">
                             <div className="fade-up pointer-events-auto bg-night-800/95 border border-coral-500/40 text-white px-4 py-3 rounded-2xl shadow-2xl flex items-center gap-3 max-w-sm backdrop-blur">
@@ -1357,7 +1519,17 @@
                                                 <strong className="text-sun-400 font-bold">{filteredPlaces.length}</strong> mete trovate
                                                 {liveData.places.length > 0 && <> &middot; <strong className="text-coral-300">{liveData.places.length}</strong> dal web per {liveData.zone}</>}
                                             </p>
+                                            {aiNotice && <p className="text-xs text-sun-300 text-pretty" role="status">{aiNotice}</p>}
                                         </div>
+                                        <div className="flex gap-2 w-full sm:w-auto">
+                                        <button
+                                            onClick={() => setShowKeyModal(true)}
+                                            className={`shrink-0 h-11 px-4 rounded-2xl border text-sm font-semibold inline-flex items-center justify-center gap-2 ${geminiKey ? 'bg-mint-500/15 border-mint-500/40 text-mint-300' : 'bg-white/5 border-white/15 text-slate-200 hover:bg-white/10'}`}
+                                            aria-label={geminiKey ? "Gemini attivo, gestisci chiave" : "Attiva Gemini"}
+                                        >
+                                            <Icon name="bot" className="w-4 h-4" />
+                                            <span>{geminiKey ? 'Gemini attivo' : 'Attiva Gemini'}</span>
+                                        </button>
                                         <button
                                             onClick={handleSearchWebWithGemini}
                                             disabled={isAiSearching}
@@ -1366,6 +1538,7 @@
                                             <Icon name="zap" className={`w-4 h-4 ${isAiSearching ? 'animate-pulse' : ''}`} />
                                             <span>{isAiSearching ? 'Cerco in zona...' : 'Aggiorna mete vicine'}</span>
                                         </button>
+                                        </div>
                                     </div>
                                     {liveData.creators.length > 0 && <CreatorStrip creators={liveData.creators} zone={liveData.zone} />}
                                 </div>
