@@ -190,10 +190,66 @@ nwr["attraction"~"animal|farm"]["name"](around:${r},${center.lat},${center.lon})
         return [...out, ...byName.values()];
     }
 
+    async function fetchNews(zone, signal) {
+        const res = await fetch(`/api/news?zone=${encodeURIComponent(zone)}`, { signal });
+        if (!res.ok) return { events: [], ideas: [] };
+        return res.json();
+    }
+
+    async function fromWebNews(zone, region, signal) {
+        let news = await fetchNews(zone, signal);
+        if (region && region !== "Tutte" && region !== zone && news.events.length + news.ideas.length < 3) {
+            news = await fetchNews(region, signal);
+        }
+        const fmt = (iso) => new Date(iso).toLocaleDateString("it-IT", { day: "numeric", month: "long" });
+        const toPlace = (item, i, kind) => ({
+            id: `web_${kind}_${normalize(item.title).replace(/ /g, "_").slice(0, 40)}_${i}`,
+            title: item.title,
+            category: kind === "event" ? "Sagre & Feste" : "Social Trends (Reel Virali)",
+            region: region || "Tutte",
+            city: zone,
+            season: "Tutte",
+            minAge: "Tutte le età",
+            stroller: false,
+            picnic: false,
+            dogs: false,
+            rating: 4.5,
+            image: "",
+            description: kind === "event"
+                ? `Segnalato da ${item.source || "un sito locale"}: apri l'articolo per date, orari e programma completo.`
+                : `Consigliato da ${item.source || "un blog di viaggi in famiglia"}: idee e itinerari per una gita con i bambini in zona ${zone}.`,
+            parentTip: "Controlla sempre date e orari sul sito ufficiale prima di partire: i programmi delle feste cambiano spesso.",
+            dateInfo: `Pubblicato il ${fmt(item.publishedAt)}${item.source ? ` · ${item.source}` : ""}`,
+            address: zone,
+            sourceUrl: item.link,
+            socialInsta: "",
+            socialFb: "",
+            live: true,
+            fromWeb: true,
+        });
+        return [
+            ...news.events.map((n, i) => toPlace(n, i, "event")),
+            ...news.ideas.map((n, i) => toPlace(n, i, "idea")),
+        ];
+    }
+
+    function socialSearches(zone) {
+        const tag = normalize(zone).replace(/ /g, "");
+        const q = encodeURIComponent;
+        return [
+            { platform: "Instagram", name: `#sagre${tag}`, focus: "Sagre e feste", url: `https://www.instagram.com/explore/tags/sagre${tag}/` },
+            { platform: "TikTok", name: `Gite con bambini ${zone}`, focus: "Video dei creator", url: `https://www.tiktok.com/search?q=${q(`gite con bambini ${zone}`)}` },
+            { platform: "Instagram", name: `#${tag}conbambini`, focus: "Family travel", url: `https://www.instagram.com/explore/tags/${tag}conbambini/` },
+            { platform: "TikTok", name: `Sagre ${zone}`, focus: "Eventi del weekend", url: `https://www.tiktok.com/search?q=${q(`sagre ${zone}`)}` },
+            { platform: "Facebook", name: `Eventi ${zone}`, focus: "Pagine e gruppi locali", url: `https://www.facebook.com/search/events/?q=${q(`sagra ${zone}`)}` },
+        ];
+    }
+
     async function scanZone({ center, radiusKm = 20, region, city, zone, signal }) {
-        const [osm, wiki] = await Promise.all([
+        const [osm, wiki, web] = await Promise.all([
             fromOverpass(center, radiusKm, signal).catch((e) => { if (signal?.aborted) throw e; return []; }),
             fromWikipedia(center, signal).catch((e) => { if (signal?.aborted) throw e; return []; }),
+            fromWebNews(zone, region, signal).catch((e) => { if (signal?.aborted) throw e; return []; }),
         ]);
         const seen = new Set();
         const items = merge(osm, wiki)
@@ -233,7 +289,7 @@ nwr["attraction"~"animal|farm"]["name"](around:${r},${center.lat},${center.lon})
                 live: true,
             };
         });
-        return { places, creators: [], zone, scannedAt };
+        return { places: [...web, ...places], creators: socialSearches(zone), zone, scannedAt };
     }
 
     const ZAINO_BASE = ["Acqua e merenda", "Salviette e gel igienizzante", "Cambio completo per i più piccoli", "Power bank per il telefono"];
