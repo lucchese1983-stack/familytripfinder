@@ -2,5 +2,9 @@
 command = "npx next build"
 publish = ".next"
 
+[build.environment]
+NETLIFY_USE_PNPM = "false"
+NODE_VERSION = "22"
+
 [[plugins]]
 package = "@netlify/plugin-nextjs"
