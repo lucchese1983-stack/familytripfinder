@@ -67,6 +67,16 @@ function parseScan(raw: string) {
   return { places: pick(json.places, placeSchema).slice(0, 8), creators: pick(json.creators, creatorSchema).slice(0, 6) }
 }
 
+const CURATED_FAMILY_SITES = [
+  "famiglieingita.it",
+  "familygo.eu",
+  "its4kids.it",
+  "vacanzebimbi.it",
+  "familyplanet.it",
+  "tanadeipapa.it",
+  "patatofriendly.com",
+]
+
 export async function POST(req: Request) {
   const parsed = bodySchema.safeParse(await req.json().catch(() => ({})))
   if (!parsed.success) {
@@ -86,10 +96,13 @@ export async function POST(req: Request) {
     const result = await runWithGemini(getAI(req), async (model, searchTools) => {
       const news = searchTools ? null : await newsPromise
       grounding.newsLinks = news
-        ? new Set([...news.events, ...news.ideas, ...news.social, ...news.influencers].map((n) => n.link))
+        ? new Set([...news.events, ...news.ideas, ...news.social, ...news.influencers, ...news.curated].map((n) => n.link))
         : null
       const headlines = news
         ? [...news.events, ...news.ideas].map((n) => `- ${n.title} | ${n.source} | ${n.link}`).join("\n")
+        : ""
+      const curated = news
+        ? news.curated.map((n) => `- ${n.title} | ${n.source} | ${n.link}`).join("\n")
         : ""
       const viral = news
         ? news.social.map((n) => `- ${n.title} | ${n.source} | ${n.link}`).join("\n")
@@ -108,7 +121,7 @@ export async function POST(req: Request) {
         prompt: `Oggi è il ${today}. Zona: ${zone}.
 ${
   searchTools
-    ? `Con una sola ricerca web trova da 5 a 8 mete per famiglie: eventi e sagre dei prossimi 30 giorni, parchi e natura, trenini o tour, e ALMENO 3 luoghi virali sui Reel (categoria "Social Trends (Reel Virali)") — per i virali cerca anche "instagram" o "tiktok" nel nome della zona per trovare luoghi virali condivisi dai creator. Trova anche 3-5 creator, influencer o pagine che pubblicano gite ed eventi per famiglie con bambini in ${zone}.`
+    ? `Con una sola ricerca web trova da 5 a 8 mete per famiglie: eventi e sagre dei prossimi 30 giorni, parchi e natura, trenini o tour, e ALMENO 3 luoghi virali sui Reel (categoria "Social Trends (Reel Virali)") — per i virali cerca anche "instagram" o "tiktok" nel nome della zona per trovare luoghi virali condivisi dai creator. Privilegia come fonti i siti specializzati in gite per famiglie: ${CURATED_FAMILY_SITES.join(", ")}. Trova anche 3-5 creator, influencer o pagine che pubblicano gite ed eventi per famiglie con bambini in ${zone}.`
     : `Notizie recenti dalla zona (titolo | fonte | link):
 ${headlines || "(nessuna notizia trovata)"}
 
@@ -118,7 +131,10 @@ ${viral || "(nessun contenuto virale trovato)"}
 Influencer e creator di viaggi per famiglie sulla zona (titolo | fonte | link):
 ${influencers || "(nessun influencer trovato)"}
 
-Scegli da 5 a 8 mete per famiglie: prima gli eventi e le sagre presenti nelle notizie (adatti ai bambini, con le date ricavate dal titolo), poi TUTTI i luoghi virali presenti nei contenuti virali (categoria "Social Trends (Reel Virali)", con sourceUrl copiato dal link fornito), poi completa con parchi, natura e trenini reali della zona. Per "creators" usa le persone e pagine trovate nella sezione influencer (nome, piattaforma e URL copiati dal link fornito); se quella sezione è vuota, lascia "creators" come lista vuota.`
+Idee da siti specializzati in gite per famiglie (titolo | fonte | link):
+${curated || "(nessuna idea trovata da questi siti)"}
+
+Scegli da 5 a 8 mete per famiglie: prima gli eventi e le sagre presenti nelle notizie (adatti ai bambini, con le date ricavate dal titolo), poi TUTTI i luoghi virali presenti nei contenuti virali (categoria "Social Trends (Reel Virali)", con sourceUrl copiato dal link fornito), poi le idee tratte dai siti specializzati elencati sopra (usa il loro link come sourceUrl), poi completa con parchi, natura e trenini reali della zona. Per "creators" usa le persone e pagine trovate nella sezione influencer (nome, piattaforma e URL copiati dal link fornito); se quella sezione è vuota, lascia "creators" come lista vuota.`
 }
 
 Formato JSON:

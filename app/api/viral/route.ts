@@ -41,11 +41,21 @@ function toViralPlace(item: { title: string; source: string; link: string; publi
   }
 }
 
+const CURATED_FAMILY_SITES = [
+  "famiglieingita.it",
+  "familygo.eu",
+  "its4kids.it",
+  "vacanzebimbi.it",
+  "familyplanet.it",
+  "tanadeipapa.it",
+  "patatofriendly.com",
+]
+
 export async function GET() {
   const zones = await Promise.all(
     HOT_ZONES.map(async (zone) => {
-      const news = await getZoneNews(zone).catch(() => ({ events: [], ideas: [], social: [], influencers: [] }))
-      const items = [...news.social, ...news.influencers, ...news.ideas]
+      const news = await getZoneNews(zone).catch(() => ({ events: [], ideas: [], social: [], influencers: [], curated: [] }))
+      const items = [...news.social, ...news.influencers, ...news.curated, ...news.ideas]
         .filter((n) => n.link.startsWith("https://") && isFamilyViral(n.title))
         .slice(0, 4)
         .map((n, i) => toViralPlace(n, zone, i))
