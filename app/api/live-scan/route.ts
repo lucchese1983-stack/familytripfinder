@@ -3,7 +3,7 @@ import { z } from "zod"
 import { getAI, runWithGemini } from "@/lib/ai"
 import { aiErrorResponse } from "@/lib/ai-error"
 import { verifyLinks } from "@/lib/verify-links"
-import { getZoneNews } from "@/lib/news"
+import { EMPTY_ZONE_NEWS, getZoneNews } from "@/lib/news"
 
 export const maxDuration = 60
 
@@ -64,7 +64,7 @@ function parseScan(raw: string) {
       const r = schema.safeParse(item)
       return r.success ? [r.data] : []
     })
-  return { places: pick(json.places, placeSchema).slice(0, 8), creators: pick(json.creators, creatorSchema).slice(0, 4) }
+  return { places: pick(json.places, placeSchema).slice(0, 8), creators: pick(json.creators, creatorSchema).slice(0, 6) }
 }
 
 export async function POST(req: Request) {
@@ -80,19 +80,22 @@ export async function POST(req: Request) {
   const grounding: { newsLinks: Set<string> | null } = { newsLinks: null }
 
   // Fetched up front (cached 30 min) so the no-search fallback doesn't add latency after a refused search call.
-  const newsPromise = getZoneNews(city || region).catch(() => ({ events: [], ideas: [], social: [] }))
+  const newsPromise = getZoneNews(city || region).catch(() => EMPTY_ZONE_NEWS)
 
   try {
     const result = await runWithGemini(getAI(req), async (model, searchTools) => {
       const news = searchTools ? null : await newsPromise
       grounding.newsLinks = news
-        ? new Set([...news.events, ...news.ideas, ...news.social].map((n) => n.link))
+        ? new Set([...news.events, ...news.ideas, ...news.social, ...news.influencers].map((n) => n.link))
         : null
       const headlines = news
         ? [...news.events, ...news.ideas].map((n) => `- ${n.title} | ${n.source} | ${n.link}`).join("\n")
         : ""
       const viral = news
         ? news.social.map((n) => `- ${n.title} | ${n.source} | ${n.link}`).join("\n")
+        : ""
+      const influencers = news
+        ? news.influencers.map((n) => `- ${n.title} | ${n.source} | ${n.link}`).join("\n")
         : ""
       return generateText({
         model,
@@ -105,14 +108,17 @@ export async function POST(req: Request) {
         prompt: `Oggi è il ${today}. Zona: ${zone}.
 ${
   searchTools
-    ? `Con una sola ricerca web trova da 5 a 8 mete per famiglie: eventi e sagre dei prossimi 30 giorni, parchi e natura, trenini o tour, e almeno 2 luoghi virali sui Reel (categoria "Social Trends (Reel Virali)") — per i virali cerca anche "instagram" o "tiktok" nel nome della zona per trovare luoghi virali condivisi dai creator. Trova anche 2-4 creator o pagine social che pubblicano gite per famiglie in ${zone}.`
+    ? `Con una sola ricerca web trova da 5 a 8 mete per famiglie: eventi e sagre dei prossimi 30 giorni, parchi e natura, trenini o tour, e ALMENO 3 luoghi virali sui Reel (categoria "Social Trends (Reel Virali)") — per i virali cerca anche "instagram" o "tiktok" nel nome della zona per trovare luoghi virali condivisi dai creator. Trova anche 3-5 creator, influencer o pagine che pubblicano gite ed eventi per famiglie con bambini in ${zone}.`
     : `Notizie recenti dalla zona (titolo | fonte | link):
 ${headlines || "(nessuna notizia trovata)"}
 
 Contenuti virali sulla zona (titolo | fonte | link):
 ${viral || "(nessun contenuto virale trovato)"}
 
-Scegli da 5 a 8 mete per famiglie: prima gli eventi e le sagre presenti nelle notizie (adatti ai bambini, con le date ricavate dal titolo), poi i luoghi virali presenti nei contenuti virali (categoria "Social Trends (Reel Virali)", con sourceUrl copiato dal link fornito), poi completa con parchi, natura e trenini reali della zona. Lascia "creators" come lista vuota.`
+Influencer e creator di viaggi per famiglie sulla zona (titolo | fonte | link):
+${influencers || "(nessun influencer trovato)"}
+
+Scegli da 5 a 8 mete per famiglie: prima gli eventi e le sagre presenti nelle notizie (adatti ai bambini, con le date ricavate dal titolo), poi TUTTI i luoghi virali presenti nei contenuti virali (categoria "Social Trends (Reel Virali)", con sourceUrl copiato dal link fornito), poi completa con parchi, natura e trenini reali della zona. Per "creators" usa le persone e pagine trovate nella sezione influencer (nome, piattaforma e URL copiati dal link fornito); se quella sezione è vuota, lascia "creators" come lista vuota.`
 }
 
 Formato JSON:
@@ -153,7 +159,7 @@ Formato JSON:
 
     return Response.json({
       places,
-      creators: grounding.newsLinks ? [] : creators,
+      creators,
       zone,
       mode: grounding.newsLinks ? "news" : "search",
       scannedAt: new Date().toISOString(),

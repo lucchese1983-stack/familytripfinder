@@ -24,7 +24,7 @@ type ViralPlace = {
 }
 
 function isFamilyViral(title: string) {
-  const viral = /virale|virali|viral|instagram|tiktok|reel|influencer|creator|boom di visite|invasione|giro del web|tutti i turisti/i
+  const viral = /virale|virali|viral|instagram|tiktok|reel|influencer|creator|boom di visite|invasione|giro del web|tutti i turisti|da vedere|scoperta|perla|gioiello/i
   const family = /famigli|bimbi|bambin|figli|genitor|pap[àa]|mamm[àa]/i
   return viral.test(title) && family.test(title)
 }
@@ -44,16 +44,16 @@ function toViralPlace(item: { title: string; source: string; link: string; publi
 export async function GET() {
   const zones = await Promise.all(
     HOT_ZONES.map(async (zone) => {
-      const news = await getZoneNews(zone).catch(() => ({ events: [], ideas: [], social: [] }))
-      const items = [...news.social, ...news.ideas]
+      const news = await getZoneNews(zone).catch(() => ({ events: [], ideas: [], social: [], influencers: [] }))
+      const items = [...news.social, ...news.influencers, ...news.ideas]
         .filter((n) => n.link.startsWith("https://") && isFamilyViral(n.title))
-        .slice(0, 3)
+        .slice(0, 4)
         .map((n, i) => toViralPlace(n, zone, i))
       return items
     }),
   )
 
-  const stories = zones.flat().slice(0, 12)
+  const stories = zones.flat().slice(0, 20)
   return Response.json(
     { stories },
     { headers: { "Cache-Control": "public, s-maxage=1800, stale-while-revalidate=3600" } },

@@ -1,10 +1,45 @@
 export type NewsItem = { title: string; source: string; link: string; publishedAt: string }
 
+// Esclude cronaca nera, gossip e intrattenimento: con i nomi dei piccoli comuni
+// Google News restituisce articoli di cronaca che contengono solo il nome del posto.
+const EXCLUDE_TERMS = [
+  "arrestato",
+  "droga",
+  "cocaina",
+  "incidente",
+  "omicidio",
+  "truffa",
+  "furto",
+  "rapina",
+  "processo",
+  "indagato",
+  "condannato",
+  "carcere",
+  "maltrattamento",
+  "aggressione",
+  "film",
+  "trailer",
+  "attore",
+  "attrice",
+  "fiction",
+  "gossip",
+  "grande fratello",
+  "uomini e donne",
+]
+const EXCLUDE = EXCLUDE_TERMS.map((t) => `-"${t}"`).join(" ")
+
+const BLOCKED_TITLE =
+  /arrestat|droga|cocain|incident|omicidi|truffa|furt|rapin|processo|indagat|condannat|carcere|maltratt|aggress|suicidi|\bfilm\b|trailer|attore|attrice|\bfiction\b|gossip|grande fratello|uomini e donne|clip del film/i
+
+export const isSafeFamilyTitle = (title: string) => !BLOCKED_TITLE.test(title)
+
 export const NEWS_QUERIES = {
-  events: (zone: string) => `(sagra OR festa OR fiera OR mercatino) "${zone}" when:21d`,
-  ideas: (zone: string) => `(gita OR "cosa fare" OR weekend) bambini famiglia "${zone}" when:60d`,
+  events: (zone: string) => `(sagra OR festa OR fiera OR mercatino) "${zone}" (famiglia OR bambini) ${EXCLUDE} when:21d`,
+  ideas: (zone: string) => `(gita OR "cosa fare" OR weekend) bambini famiglia "${zone}" ${EXCLUDE} when:60d`,
   social: (zone: string) =>
-    `(virale OR virali OR "viral" OR instagram OR tiktok OR reel) (luogo OR borgo OR spiaggia OR parco OR gita) (famiglia OR bambini OR "con i bambini") "${zone}" when:30d`,
+    `(virale OR virali OR instagram OR tiktok OR reel OR influencer OR creator) (luogo OR borgo OR spiaggia OR parco OR gita) (famiglia OR bambini OR "con i bambini") "${zone}" ${EXCLUDE} when:30d`,
+  influencers: (zone: string) =>
+    `(influencer OR creator OR "famiglia in viaggio" OR "viaggiare con i bambini" OR "family travel" OR "viaggi in famiglia") "${zone}" ${EXCLUDE} when:90d`,
 }
 
 const decode = (s: string) =>
@@ -43,7 +78,7 @@ export async function searchNews(query: string): Promise<NewsItem[]> {
 export function dedupeNews(items: NewsItem[], limit: number) {
   const seen = new Set<string>()
   return items
-    .filter((i) => i.title && i.link.startsWith("https://"))
+    .filter((i) => i.title && i.link.startsWith("https://") && isSafeFamilyTitle(i.title))
     .filter((i) => {
       const key = i.title.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 50)
       return !seen.has(key) && seen.add(key)
@@ -53,10 +88,18 @@ export function dedupeNews(items: NewsItem[], limit: number) {
 }
 
 export async function getZoneNews(zone: string) {
-  const [events, ideas, social] = await Promise.all([
+  const [events, ideas, social, influencers] = await Promise.all([
     searchNews(NEWS_QUERIES.events(zone)).catch(() => []),
     searchNews(NEWS_QUERIES.ideas(zone)).catch(() => []),
     searchNews(NEWS_QUERIES.social(zone)).catch(() => []),
+    searchNews(NEWS_QUERIES.influencers(zone)).catch(() => []),
   ])
-  return { events: dedupeNews(events, 8), ideas: dedupeNews(ideas, 6), social: dedupeNews(social, 8) }
+  return {
+    events: dedupeNews(events, 8),
+    ideas: dedupeNews(ideas, 6),
+    social: dedupeNews(social, 12),
+    influencers: dedupeNews(influencers, 6),
+  }
 }
+
+export const EMPTY_ZONE_NEWS = { events: [], ideas: [], social: [], influencers: [] } as const
