@@ -238,9 +238,12 @@ nwr["attraction"~"animal|farm"]["name"](around:${r},${center.lat},${center.lon})
         const q = encodeURIComponent;
         return [
             { platform: "Instagram", name: `#sagre${tag}`, focus: "Sagre e feste", url: `https://www.instagram.com/explore/tags/sagre${tag}/` },
-            { platform: "TikTok", name: `Gite con bambini ${zone}`, focus: "Video dei creator", url: `https://www.tiktok.com/search?q=${q(`gite con bambini ${zone}`)}` },
+            { platform: "TikTok", name: `Gite con bambini ${zone}`, focus: "Reel e video virali", url: `https://www.tiktok.com/search?q=${q(`gite con bambini ${zone}`)}` },
+            { platform: "TikTok", name: `${zone} viral`, focus: "Luoghi del momento", url: `https://www.tiktok.com/search?q=${q(`${zone} posto virale`)}` },
             { platform: "Instagram", name: `#${tag}conbambini`, focus: "Family travel", url: `https://www.instagram.com/explore/tags/${tag}conbambini/` },
+            { platform: "Instagram", name: `#luoghivirali`, focus: "Reel virali d'Italia", url: "https://www.instagram.com/explore/tags/luoghivirali/" },
             { platform: "TikTok", name: `Sagre ${zone}`, focus: "Eventi del weekend", url: `https://www.tiktok.com/search?q=${q(`sagre ${zone}`)}` },
+            { platform: "Facebook", name: `Reel ${zone}`, focus: "Video di tendenza", url: `https://www.facebook.com/search/videos/?q=${q(`gita famiglia ${zone}`)}` },
             { platform: "Facebook", name: `Eventi ${zone}`, focus: "Pagine e gruppi locali", url: `https://www.facebook.com/search/events/?q=${q(`sagra ${zone}`)}` },
         ];
     }

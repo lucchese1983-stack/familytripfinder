@@ -3,6 +3,8 @@ export type NewsItem = { title: string; source: string; link: string; publishedA
 export const NEWS_QUERIES = {
   events: (zone: string) => `(sagra OR festa OR fiera OR mercatino) "${zone}" when:21d`,
   ideas: (zone: string) => `(gita OR "cosa fare" OR weekend) bambini famiglia "${zone}" when:60d`,
+  social: (zone: string) =>
+    `(virale OR virali OR "viral" OR instagram OR tiktok OR reel) (luogo OR borgo OR spiaggia OR parco OR gita) (famiglia OR bambini OR "con i bambini") "${zone}" when:30d`,
 }
 
 const decode = (s: string) =>
@@ -51,9 +53,10 @@ export function dedupeNews(items: NewsItem[], limit: number) {
 }
 
 export async function getZoneNews(zone: string) {
-  const [events, ideas] = await Promise.all([
+  const [events, ideas, social] = await Promise.all([
     searchNews(NEWS_QUERIES.events(zone)).catch(() => []),
     searchNews(NEWS_QUERIES.ideas(zone)).catch(() => []),
+    searchNews(NEWS_QUERIES.social(zone)).catch(() => []),
   ])
-  return { events: dedupeNews(events, 8), ideas: dedupeNews(ideas, 6) }
+  return { events: dedupeNews(events, 8), ideas: dedupeNews(ideas, 6), social: dedupeNews(social, 8) }
 }

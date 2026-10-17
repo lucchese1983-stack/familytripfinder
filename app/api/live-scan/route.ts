@@ -80,14 +80,19 @@ export async function POST(req: Request) {
   const grounding: { newsLinks: Set<string> | null } = { newsLinks: null }
 
   // Fetched up front (cached 30 min) so the no-search fallback doesn't add latency after a refused search call.
-  const newsPromise = getZoneNews(city || region).catch(() => ({ events: [], ideas: [] }))
+  const newsPromise = getZoneNews(city || region).catch(() => ({ events: [], ideas: [], social: [] }))
 
   try {
     const result = await runWithGemini(getAI(req), async (model, searchTools) => {
       const news = searchTools ? null : await newsPromise
-      grounding.newsLinks = news ? new Set([...news.events, ...news.ideas].map((n) => n.link)) : null
+      grounding.newsLinks = news
+        ? new Set([...news.events, ...news.ideas, ...news.social].map((n) => n.link))
+        : null
       const headlines = news
         ? [...news.events, ...news.ideas].map((n) => `- ${n.title} | ${n.source} | ${n.link}`).join("\n")
+        : ""
+      const viral = news
+        ? news.social.map((n) => `- ${n.title} | ${n.source} | ${n.link}`).join("\n")
         : ""
       return generateText({
         model,
@@ -96,15 +101,18 @@ export async function POST(req: Request) {
         abortSignal: AbortSignal.timeout(45_000),
         system: searchTools
           ? "Sei un redattore di gite ed eventi per famiglie con bambini in Italia. Usa la ricerca web, riporta solo informazioni verificate e non inventare mai link. Rispondi SOLO con un oggetto JSON valido, senza testo prima o dopo e senza blocchi di codice."
-          : "Sei un redattore di gite ed eventi per famiglie con bambini in Italia. Non hai accesso al web: per eventi e sagre usa SOLO le notizie fornite, copiando il link esatto in sourceUrl. Per parchi e luoghi usa solo posti reali e famosi che conosci con certezza, con sourceUrl vuoto. Non inventare mai link, date o eventi. Rispondi SOLO con un oggetto JSON valido, senza testo prima o dopo e senza blocchi di codice.",
+          : "Sei un redattore di gite ed eventi per famiglie con bambini in Italia. Non hai accesso al web: per eventi e sagre usa SOLO le notizie fornite, copiando il link esatto in sourceUrl. Per i luoghi virali usa SOLO i contenuti virali forniti, copiando il link esatto in sourceUrl. Per parchi e luoghi usa solo posti reali e famosi che conosci con certezza, con sourceUrl vuoto. Non inventare mai link, date o eventi. Rispondi SOLO con un oggetto JSON valido, senza testo prima o dopo e senza blocchi di codice.",
         prompt: `Oggi è il ${today}. Zona: ${zone}.
 ${
   searchTools
-    ? `Con una sola ricerca web trova da 5 a 8 mete per famiglie: eventi e sagre dei prossimi 30 giorni, parchi e natura, trenini o tour, e almeno 2 luoghi virali sui Reel (categoria "Social Trends (Reel Virali)"). Trova anche 2-4 creator o pagine social che pubblicano gite per famiglie in ${zone}.`
+    ? `Con una sola ricerca web trova da 5 a 8 mete per famiglie: eventi e sagre dei prossimi 30 giorni, parchi e natura, trenini o tour, e almeno 2 luoghi virali sui Reel (categoria "Social Trends (Reel Virali)") — per i virali cerca anche "instagram" o "tiktok" nel nome della zona per trovare luoghi virali condivisi dai creator. Trova anche 2-4 creator o pagine social che pubblicano gite per famiglie in ${zone}.`
     : `Notizie recenti dalla zona (titolo | fonte | link):
 ${headlines || "(nessuna notizia trovata)"}
 
-Scegli da 5 a 8 mete per famiglie: prima gli eventi e le sagre presenti nelle notizie (adatti ai bambini, con le date ricavate dal titolo), poi completa con parchi, natura e trenini reali della zona. Lascia "creators" come lista vuota.`
+Contenuti virali sulla zona (titolo | fonte | link):
+${viral || "(nessun contenuto virale trovato)"}
+
+Scegli da 5 a 8 mete per famiglie: prima gli eventi e le sagre presenti nelle notizie (adatti ai bambini, con le date ricavate dal titolo), poi i luoghi virali presenti nei contenuti virali (categoria "Social Trends (Reel Virali)", con sourceUrl copiato dal link fornito), poi completa con parchi, natura e trenini reali della zona. Lascia "creators" come lista vuota.`
 }
 
 Formato JSON:
