@@ -17,7 +17,11 @@ export function aiErrorResponse(error: unknown, fallback: string) {
 
   if (/credit card|key missing/i.test(message)) {
     return Response.json(
-      { error: "Serve la tua chiave Google Gemini: inseriscila nel pannello Live (è gratuita).", code: "ai_key_missing" },
+      {
+        error:
+          "Nessuna chiave Gemini attiva: apri il pannello Live e incolla la tua chiave gratuita di aistudio.google.com.",
+        code: "ai_key_missing",
+      },
       { status: 402 },
     )
   }

@@ -3,8 +3,17 @@ import { gateway, type LanguageModel, type ToolSet } from "ai"
 
 // Tried in order. A model is skipped only when Google says it has no free quota ("limit: 0")
 // or doesn't exist / can't search: those rejections cost nothing, so the next model gets a fair chance.
-// "*-latest" aliases are last-resort fallbacks because Google retires pinned IDs for new keys.
-const GEMINI_MODELS = ["gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-flash-lite-latest", "gemini-flash-latest"] as const
+// "*-latest" aliases and the 2.x stable IDs are last-resort fallbacks because Google retires pinned IDs
+// for new keys and free-tier keys sometimes only see older models.
+const GEMINI_MODELS = [
+  "gemini-3.5-flash-lite",
+  "gemini-3.5-flash",
+  "gemini-flash-lite-latest",
+  "gemini-flash-latest",
+  "gemini-2.5-flash-lite",
+  "gemini-2.5-flash",
+  "gemini-2.0-flash",
+] as const
 
 export type AIConfig = {
   models: LanguageModel[]
@@ -21,6 +30,12 @@ export function getAI(req: Request): AIConfig {
       models: GEMINI_MODELS.map((id) => google(id)),
       searchTools: () => ({ google_search: google.tools.googleSearch({}) }),
     }
+  }
+
+  if (!process.env.AI_GATEWAY_API_KEY) {
+    throw Object.assign(new Error("key missing: no AI key configured on server and none provided"), {
+      name: "AIKeyMissingError",
+    })
   }
 
   return {
