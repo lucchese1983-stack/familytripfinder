@@ -121,7 +121,7 @@ export async function POST(req: Request) {
         prompt: `Oggi è il ${today}. Zona: ${zone}.
 ${
   searchTools
-    ? `Con una sola ricerca web trova da 5 a 8 mete per famiglie: eventi e sagre dei prossimi 30 giorni, parchi e natura, trenini o tour, e ALMENO 3 luoghi virali sui Reel (categoria "Social Trends (Reel Virali)") — per i virali cerca anche "instagram" o "tiktok" nel nome della zona per trovare luoghi virali condivisi dai creator. Privilegia come fonti i siti specializzati in gite per famiglie: ${CURATED_FAMILY_SITES.join(", ")}. Trova anche 3-5 creator, influencer o pagine che pubblicano gite ed eventi per famiglie con bambini in ${zone}.`
+    ? `Con una sola ricerca web trova da 5 a 8 mete per famiglie: eventi e sagre dei prossimi 30 giorni, parchi e natura, trenini o tour, e ALMENO 3 luoghi virali sui Reel (categoria "Social Trends (Reel Virali)") — per i virali cerca anche "instagram" o "tiktok" nel nome della zona per trovare luoghi virali condivisi dai creator. Le sagre e gli eventi sono prioritari e devono venire SEMPRE dal web aggiornato (portali di eventi, pro-loco, comuni), mai da elenchi generici: verifica che le date ricavate siano future rispetto a oggi (${today}). Per parchi, gite e tour privilegia come fonti i siti specializzati in famiglie: ${CURATED_FAMILY_SITES.join(", ")}. Trova anche 3-5 creator, influencer o pagine che pubblicano gite ed eventi per famiglie con bambini in ${zone}.`
     : `Notizie recenti dalla zona (titolo | fonte | link):
 ${headlines || "(nessuna notizia trovata)"}
 
@@ -134,7 +134,7 @@ ${influencers || "(nessun influencer trovato)"}
 Idee da siti specializzati in gite per famiglie (titolo | fonte | link):
 ${curated || "(nessuna idea trovata da questi siti)"}
 
-Scegli da 5 a 8 mete per famiglie: prima gli eventi e le sagre presenti nelle notizie (adatti ai bambini, con le date ricavate dal titolo), poi TUTTI i luoghi virali presenti nei contenuti virali (categoria "Social Trends (Reel Virali)", con sourceUrl copiato dal link fornito), poi le idee tratte dai siti specializzati elencati sopra (usa il loro link come sourceUrl), poi completa con parchi, natura e trenini reali della zona. Per "creators" usa le persone e pagine trovate nella sezione influencer (nome, piattaforma e URL copiati dal link fornito); se quella sezione è vuota, lascia "creators" come lista vuota.`
+Scegli da 5 a 8 mete per famiglie: prima gli eventi e le sagre presenti nelle notizie (adatti ai bambini, con le date ricavate dal titolo; scarta quelli con date passate rispetto a oggi, ${today}), poi TUTTI i luoghi virali presenti nei contenuti virali (categoria "Social Trends (Reel Virali)", con sourceUrl copiato dal link fornito), poi le idee tratte dai siti specializzati elencati sopra (usa il loro link come sourceUrl), poi completa con parchi, natura e trenini reali della zona. Per "creators" usa le persone e pagine trovate nella sezione influencer (nome, piattaforma e URL copiati dal link fornito); se quella sezione è vuota, lascia "creators" come lista vuota.`
 }
 
 Formato JSON:

@@ -54,7 +54,7 @@ export const NEWS_QUERIES = {
   // Siti specializzati in gite per famiglie scelti come fonti curate: si aggiornano meno
   // spesso dei giornali, quindi la finestra temporale è più larga.
   curated: (zone: string) =>
-    `(gita OR luogo OR parco OR attività OR evento) "${zone}" (${CURATED_SITES.map((s) => `site:${s}`).join(" OR ")}) ${EXCLUDE} when:1y`,
+    `(gita OR parco OR "cosa fare" OR evento) "${zone}" (${CURATED_SITES.map((s) => `site:${s}`).join(" OR ")}) -sagra -festa ${EXCLUDE} when:1y`,
 }
 
 const decode = (s: string) =>
