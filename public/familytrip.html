@@ -182,6 +182,44 @@
         ::-webkit-scrollbar-thumb { background: #1c2550; border-radius: 4px; }
         ::-webkit-scrollbar-thumb:hover { background: #ff7a59; }
 
+        /* ===== iPhone layout ===== */
+        @media (max-width: 767px) {
+            .kite { display: none; }
+
+            /* Let content use the full screen width instead of nesting inside a bordered panel */
+            main > section.glass-panel {
+                background: transparent;
+                border: 0;
+                box-shadow: none;
+                padding: 0;
+                backdrop-filter: none;
+                -webkit-backdrop-filter: none;
+            }
+
+            /* Category chips: solid frosted bar pinned under the status bar */
+            .sticky.top-16 {
+                top: 0;
+                padding-top: calc(var(--safe-top) + 0.5rem);
+                padding-bottom: 0.625rem;
+                background: rgba(11, 16, 38, 0.86);
+                backdrop-filter: blur(18px) saturate(160%);
+                -webkit-backdrop-filter: blur(18px) saturate(160%);
+                border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+            }
+            .sticky.top-16 .overflow-x-auto { scroll-snap-type: x proximity; scroll-padding-inline: 1rem; }
+            .sticky.top-16 .overflow-x-auto > button { scroll-snap-align: start; }
+
+            /* Action buttons on one line */
+            main button.h-11 { white-space: nowrap; font-size: 13px; padding-inline: 0.875rem; }
+
+            /* Cards: tighter, more image-forward */
+            article.glass-card { border-radius: 1.5rem; }
+            article.glass-card img { aspect-ratio: 16 / 10; height: auto; object-fit: cover; }
+
+            /* Keep the last card clear of the floating tab bar */
+            main { padding-bottom: calc(6rem + var(--safe-bottom)); }
+        }
+
         @media print {
             body * { visibility: hidden; }
             #printable-itinerary, #printable-itinerary * { visibility: visible; }
