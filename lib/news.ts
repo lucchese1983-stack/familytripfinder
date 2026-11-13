@@ -45,7 +45,9 @@ const CURATED_SITES = [
 ]
 
 export const NEWS_QUERIES = {
-  events: (zone: string) => `(sagra OR festa OR fiera OR mercatino) "${zone}" (famiglia OR bambini) ${EXCLUDE} when:21d`,
+  events: (zone: string) => `(sagra OR festa OR fiera OR mercatino OR festival) "${zone}" ${EXCLUDE} when:21d`,
+  tours: (zone: string) =>
+    `("treno storico" OR trenino OR funivia OR battello OR navigazione OR "visita guidata" OR "tour guidato" OR escursione) "${zone}" ${EXCLUDE} when:60d`,
   ideas: (zone: string) => `(gita OR "cosa fare" OR weekend) bambini famiglia "${zone}" ${EXCLUDE} when:60d`,
   social: (zone: string) =>
     `(virale OR virali OR instagram OR tiktok OR reel OR influencer OR creator) (luogo OR borgo OR spiaggia OR parco OR gita) (famiglia OR bambini OR "con i bambini") "${zone}" ${EXCLUDE} when:30d`,
@@ -103,15 +105,17 @@ export function dedupeNews(items: NewsItem[], limit: number) {
 }
 
 export async function getZoneNews(zone: string) {
-  const [events, ideas, social, influencers, curated] = await Promise.all([
+  const [events, tours, ideas, social, influencers, curated] = await Promise.all([
     searchNews(NEWS_QUERIES.events(zone)).catch(() => []),
+    searchNews(NEWS_QUERIES.tours(zone)).catch(() => []),
     searchNews(NEWS_QUERIES.ideas(zone)).catch(() => []),
     searchNews(NEWS_QUERIES.social(zone)).catch(() => []),
     searchNews(NEWS_QUERIES.influencers(zone)).catch(() => []),
     searchNews(NEWS_QUERIES.curated(zone)).catch(() => []),
   ])
   return {
-    events: dedupeNews(events, 8),
+    events: dedupeNews(events, 12),
+    tours: dedupeNews(tours, 8),
     ideas: dedupeNews(ideas, 6),
     social: dedupeNews(social, 12),
     influencers: dedupeNews(influencers, 6),
@@ -119,4 +123,4 @@ export async function getZoneNews(zone: string) {
   }
 }
 
-export const EMPTY_ZONE_NEWS = { events: [], ideas: [], social: [], influencers: [], curated: [] } as const
+export const EMPTY_ZONE_NEWS = { events: [], tours: [], ideas: [], social: [], influencers: [], curated: [] } as const

@@ -57,6 +57,8 @@
         museum: { label: "Museo", category: "Treni & Tour", stroller: true, picnic: false, dogs: false, rank: 2 },
         castle: { label: "Castello e borgo", category: "Treni & Tour", stroller: false, picnic: true, dogs: true, rank: 2 },
         railway: { label: "Trenino, funivia o tour", category: "Treni & Tour", stroller: true, picnic: false, dogs: true, rank: 1 },
+        boat: { label: "Battello e navigazione", category: "Treni & Tour", stroller: true, picnic: false, dogs: true, rank: 1 },
+        adventure: { label: "Parco avventura", category: "Parchi & Natura", stroller: false, picnic: true, dogs: false, rank: 1 },
         park: { label: "Parco e giardino", category: "Parchi & Natura", stroller: true, picnic: true, dogs: true, rank: 2 },
         nature: { label: "Natura e sentieri", category: "Parchi & Natura", stroller: false, picnic: true, dogs: true, rank: 2 },
         lake: { label: "Lago e acqua", category: "Parchi & Natura", stroller: true, picnic: true, dogs: true, rank: 2 },
@@ -72,6 +74,8 @@
         museum: "Chiedete in biglietteria se ci sono percorsi o schede gioco per bambini.",
         castle: "Spesso ci sono scale e acciottolato: meglio il marsupio del passeggino.",
         railway: "Prenotate i biglietti online nei weekend: le corse per famiglie si riempiono presto.",
+        boat: "Controllate gli orari stagionali dei battelli: fuori stagione le corse sono poche. I bambini piccoli spesso viaggiano gratis.",
+        adventure: "Verificate altezza ed età minime dei percorsi prima di partire e portate scarpe chiuse.",
         park: "Cercate le aree giochi e una zona all'ombra per la merenda.",
         nature: "Scegliete un percorso ad anello breve e verificate il meteo prima di partire.",
         lake: "Il lungolago è perfetto per una passeggiata: portate un cambio per i più piccoli.",
@@ -84,7 +88,9 @@
         if (tags.tourism === "zoo") return "zoo";
         if (tags.tourism === "aquarium") return "aquarium";
         if (tags.tourism === "museum") return "museum";
-        if (tags.historic === "castle") return "castle";
+        if (tags.historic) return "castle";
+        if (tags.amenity === "ferry_terminal") return "boat";
+        if (tags.sport === "climbing_adventure") return "adventure";
         if (tags.aerialway || tags.railway) return "railway";
         if (tags.leisure === "nature_reserve" || tags.boundary === "protected_area") return "nature";
         if (tags.leisure === "park" || tags.leisure === "garden") return "park";
@@ -100,7 +106,9 @@
         [/fattoria/, "farm"],
         [/museo|planetario|osservatorio astronomico|science center/, "museum"],
         [/castello|rocca|fortezza|\bforte\b|borgo medievale/, "castle"],
-        [/funivia|funicolare|cabinovia|ferrovia turistica|trenino/, "railway"],
+        [/parco avventura|adventure park/, "adventure"],
+        [/funivia|funicolare|cabinovia|seggiovia|ferrovia turistica|treno storico|trenino/, "railway"],
+        [/navigazione|battello|motonave|traghett/, "boat"],
         [/orto botanico|giardino|parco (urbano|pubblico|naturale|regionale|nazionale)|\bparco\b/, "park"],
         [/riserva|oasi|cascat|grott|sentiero|gola|monte|valle/, "nature"],
         [/\blago\b|laghetto|lungolago/, "lake"],
@@ -109,15 +117,23 @@
 
     async function fromOverpass(center, radiusKm, signal) {
         const r = Math.round(radiusKm * 1000);
-        const q = `[out:json][timeout:20];(
-nwr["tourism"~"^(theme_park|zoo|aquarium)$"](around:${r},${center.lat},${center.lon});
-nwr["leisure"="water_park"](around:${r},${center.lat},${center.lon});
-nwr["tourism"="museum"]["name"](around:${Math.min(r, 15000)},${center.lat},${center.lon});
-nwr["historic"="castle"]["name"]["tourism"](around:${r},${center.lat},${center.lon});
-nwr["leisure"~"^(park|garden|nature_reserve)$"]["name"]["wikidata"](around:${r},${center.lat},${center.lon});
-nwr["tourism"="attraction"]["name"]["wikidata"](around:${r},${center.lat},${center.lon});
-nwr["attraction"~"animal|farm"]["name"](around:${r},${center.lat},${center.lon});
-);out center tags 60;`;
+        const a = `(around:${r},${center.lat},${center.lon})`;
+        const q = `[out:json][timeout:25];(
+nwr["tourism"~"^(theme_park|zoo|aquarium)$"]${a};
+nwr["leisure"="water_park"]${a};
+nwr["sport"="climbing_adventure"]["name"]${a};
+nwr["tourism"="museum"]["name"]${a};
+nwr["historic"~"^(castle|fort)$"]["name"]${a};
+nwr["historic"="archaeological_site"]["name"]["wikidata"]${a};
+nwr["railway"~"^(preserved|funicular|miniature)$"]["name"]${a};
+nwr["railway:preserved"="yes"]["name"]${a};
+nwr["usage"="tourism"]["railway"]["name"]${a};
+way["aerialway"~"^(cable_car|gondola|mixed_lift|chair_lift)$"]["name"]${a};
+nwr["amenity"="ferry_terminal"]["name"]${a};
+nwr["leisure"~"^(park|garden|nature_reserve)$"]["name"]["wikidata"]${a};
+nwr["tourism"="attraction"]["name"]["wikidata"]${a};
+nwr["attraction"~"animal|farm"]["name"]${a};
+);out center tags 300;`;
         for (const url of OVERPASS_MIRRORS) {
             try {
                 const data = await fetchJSON(url, {
@@ -155,10 +171,23 @@ nwr["attraction"~"animal|farm"]["name"](around:${r},${center.lat},${center.lon})
         return [];
     }
 
-    async function fromWikipedia(center, signal) {
-        const url = `https://it.wikipedia.org/w/api.php?action=query&format=json&origin=*&generator=geosearch&ggscoord=${center.lat}|${center.lon}&ggsradius=10000&ggslimit=50&prop=coordinates|pageimages|extracts|description|info&inprop=url&exintro=1&explaintext=1&exsentences=2&exlimit=max&piprop=thumbnail&pithumbsize=640`;
-        const data = await fetchJSON(url, {}, 12000, signal);
-        return Object.values(data.query?.pages || {}).flatMap((p) => {
+    // Wikipedia geosearch is capped at 10 km, so wider radii are covered with extra points around the center.
+    function wikiPoints(center, radiusKm) {
+        if (radiusKm <= 12) return [center];
+        const d = Math.min(radiusKm * 0.6, 30);
+        const dLat = d / 111;
+        const dLon = d / (111 * Math.cos((center.lat * Math.PI) / 180));
+        return [center, { lat: center.lat + dLat, lon: center.lon }, { lat: center.lat - dLat, lon: center.lon }, { lat: center.lat, lon: center.lon + dLon }, { lat: center.lat, lon: center.lon - dLon }];
+    }
+
+    async function fromWikipedia(center, radiusKm, signal) {
+        const results = await Promise.all(wikiPoints(center, radiusKm).map((pt) => {
+            const url = `https://it.wikipedia.org/w/api.php?action=query&format=json&origin=*&generator=geosearch&ggscoord=${pt.lat}|${pt.lon}&ggsradius=10000&ggslimit=50&prop=coordinates|pageimages|extracts|description|info&inprop=url&exintro=1&explaintext=1&exsentences=2&exlimit=max&piprop=thumbnail&pithumbsize=640`;
+            return fetchJSON(url, {}, 12000, signal).catch((e) => { if (signal?.aborted) throw e; return {}; });
+        }));
+        const pages = new Map();
+        for (const data of results) for (const p of Object.values(data.query?.pages || {})) pages.set(p.pageid, p);
+        return [...pages.values()].flatMap((p) => {
             const text = `${p.title} ${p.description || ""}`.toLowerCase();
             if (WIKI_EXCLUDE.test(p.title.toLowerCase()) || !p.coordinates?.[0]) return [];
             const match = WIKI_KINDS.find(([re]) => re.test(text));
@@ -201,11 +230,12 @@ nwr["attraction"~"animal|farm"]["name"](around:${r},${center.lat},${center.lon})
         if (region && region !== "Tutte" && region !== zone && news.events.length + news.ideas.length < 3) {
             news = await fetchNews(region, signal);
         }
+        news.tours = news.tours || [];
         const fmt = (iso) => new Date(iso).toLocaleDateString("it-IT", { day: "numeric", month: "long" });
         const toPlace = (item, i, kind) => ({
             id: `web_${kind}_${normalize(item.title).replace(/ /g, "_").slice(0, 40)}_${i}`,
             title: item.title,
-            category: kind === "event" ? "Sagre & Feste" : "Social Trends (Reel Virali)",
+            category: kind === "event" ? "Sagre & Feste" : kind === "tour" ? "Treni & Tour" : "Social Trends (Reel Virali)",
             region: region || "Tutte",
             city: zone,
             season: "Tutte",
@@ -217,6 +247,8 @@ nwr["attraction"~"animal|farm"]["name"](around:${r},${center.lat},${center.lon})
             image: "",
             description: kind === "event"
                 ? `Segnalato da ${item.source || "un sito locale"}: apri l'articolo per date, orari e programma completo.`
+                : kind === "tour"
+                ? `Tour, treno o escursione segnalato da ${item.source || "un sito locale"}: apri l'articolo per date, prenotazioni e prezzi.`
                 : `Consigliato da ${item.source || "un blog di viaggi in famiglia"}: idee e itinerari per una gita con i bambini in zona ${zone}.`,
             parentTip: "Controlla sempre date e orari sul sito ufficiale prima di partire: i programmi delle feste cambiano spesso.",
             dateInfo: `Pubblicato il ${fmt(item.publishedAt)}${item.source ? ` · ${item.source}` : ""}`,
@@ -229,6 +261,7 @@ nwr["attraction"~"animal|farm"]["name"](around:${r},${center.lat},${center.lon})
         });
         return [
             ...news.events.map((n, i) => toPlace(n, i, "event")),
+            ...news.tours.map((n, i) => toPlace(n, i, "tour")),
             ...news.ideas.map((n, i) => toPlace(n, i, "idea")),
         ];
     }
@@ -248,18 +281,22 @@ nwr["attraction"~"animal|farm"]["name"](around:${r},${center.lat},${center.lon})
         ];
     }
 
+    const KIND_LIMIT = 6;
+
     async function scanZone({ center, radiusKm = 20, region, city, zone, signal }) {
         const [osm, wiki, web] = await Promise.all([
             fromOverpass(center, radiusKm, signal).catch((e) => { if (signal?.aborted) throw e; return []; }),
-            fromWikipedia(center, signal).catch((e) => { if (signal?.aborted) throw e; return []; }),
+            fromWikipedia(center, radiusKm, signal).catch((e) => { if (signal?.aborted) throw e; return []; }),
             fromWebNews(zone, region, signal).catch((e) => { if (signal?.aborted) throw e; return []; }),
         ]);
         const seen = new Set();
+        const perKind = {};
         const items = merge(osm, wiki)
             .map((p) => ({ ...p, km: distanceKm(center, p) }))
             .filter((p) => p.km <= radiusKm * 1.2 && !seen.has(normalize(p.name)) && seen.add(normalize(p.name)))
             .sort((a, b) => (KIND_INFO[a.kind].rank - KIND_INFO[b.kind].rank) || (a.km - b.km))
-            .slice(0, 14);
+            .filter((p) => (perKind[p.kind] = (perKind[p.kind] || 0) + 1) <= KIND_LIMIT)
+            .slice(0, 48);
 
         const scannedAt = new Date().toISOString();
         const places = items.map((p, i) => {
